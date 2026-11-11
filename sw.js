@@ -1,6 +1,6 @@
 // Guarda o app no iPhone/Mac para abrir mesmo sem internet.
 // Sempre tenta buscar a versão mais nova primeiro; sem internet, usa a cópia guardada.
-const CACHE = 'teleprompter-v5';
+const CACHE = 'teleprompter-v6';
 const FILES = ['./', './index.html', './manifest.webmanifest', './apple-touch-icon.png', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
