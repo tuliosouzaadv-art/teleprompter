@@ -38,6 +38,12 @@
   .start{width:100%;margin-top:16px;background:var(--acc);color:#111;border:0;border-radius:14px;padding:16px;font-size:18px;font-weight:700}
   .tip{color:var(--mut);font-size:12.5px;line-height:1.5;margin-top:14px}
   .tip code{background:var(--panel);padding:1px 5px;border-radius:4px;color:var(--acc)}
+  select{width:100%;background:#0f0f12;color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit;font-size:14px;margin-top:8px}
+  .sel-lbl{display:block;font-size:12.5px;color:var(--mut);margin-top:10px}
+  .desk-only{display:none}
+  body.desk .desk-only{display:block}
+  body.desk .mob-only{display:none!important}
+  kbd{background:#222228;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 5px;font-size:12px;font-family:inherit;color:var(--txt)}
 
   /* ---------- Tela do prompter ---------- */
   #play{position:fixed;inset:0;background:#000;overflow:hidden;touch-action:none}
@@ -121,7 +127,14 @@
       <label>Câmera</label>
       <div class="toggles">
         <button class="chip on" id="tCam">Gravar com a câmera</button>
-        <button class="chip on" id="tFront">Câmera frontal</button>
+        <button class="chip on mob-only" id="tFront">Câmera frontal</button>
+      </div>
+      <div class="desk-only">
+        <span class="sel-lbl">Qual câmera usar</span>
+        <select id="camSel"><option value="">Câmera padrão do Mac</option></select>
+        <span class="sel-lbl">Qual microfone usar</span>
+        <select id="micSel"><option value="">Microfone padrão do Mac</option></select>
+        <div class="tip" id="devHelp" style="margin-top:6px">Libere a câmera e o microfone (botão abaixo) para ver a lista com os nomes. Webcam USB, microfone de lapela/USB e o iPhone como webcam (Câmera de Continuidade) aparecem aqui.</div>
       </div>
     </div>
     <div class="row" id="permRow">
@@ -165,7 +178,8 @@
         <button class="chip" data-v="v">▯ Vertical 9:16<br><small>Reels / Stories / TikTok</small></button>
         <button class="chip" data-v="h">▭ Horizontal 16:9<br><small>YouTube / apresentações</small></button>
       </div>
-      <div class="tip" style="margin-top:6px">Para horizontal, gire o iPhone de lado antes de gravar — a imagem enquadrada aparece na tela exatamente como vai sair no vídeo.</div>
+      <div class="tip mob-only" style="margin-top:6px">Para horizontal, gire o iPhone de lado antes de gravar — a imagem enquadrada aparece na tela exatamente como vai sair no vídeo.</div>
+      <div class="tip desk-only" style="margin-top:6px">No Mac, use <b>Horizontal 16:9</b> para o YouTube (aproveita a imagem inteira da câmera). A vertical funciona, mas é um recorte do meio da imagem, com menos definição.</div>
     </div>
     <div class="row">
       <label>Altura da faixa de texto (modo câmera) <b id="vArea">40%</b></label>
@@ -192,6 +206,13 @@
 
   <button class="start" id="startBtn">▶ Começar</button>
 
+  <div class="tip desk-only">
+    <b>No Mac:</b><br>
+    • Use o <b>Chrome</b> ou o Safari. Ao tocar em Começar, a tela entra em modo tela cheia (<kbd>Esc</kbd> sai).<br>
+    • Atalhos: <kbd>espaço</kbd> pausa/continua · <kbd>R</kbd> grava/para · <kbd>↑</kbd> <kbd>↓</kbd> volta/avança o texto · <kbd>+</kbd> <kbd>−</kbd> velocidade · <kbd>Esc</kbd> sai.<br>
+    • A câmera do Mac fica no meio, em cima da tela: o texto aparece numa coluna central no alto, para seu olhar ficar perto da lente.<br>
+    • Ao terminar, “Baixar vídeo” salva o arquivo na pasta <b>Downloads</b>.<br><br>
+  </div>
   <div class="tip">
     <b>Dicas:</b><br>
     • Toque na tela para pausar/continuar. Com pausa, arraste para voltar ou avançar.<br>
@@ -250,6 +271,10 @@
 <script>
 (function(){
   const $ = id => document.getElementById(id);
+  // Computador (Mac/PC) x celular/tablet. O iPad se apresenta como "Mac", mas tem tela de toque.
+  const DESK = !/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) && !(navigator.maxTouchPoints>1);
+  if(DESK) document.body.classList.add('desk');
+  const DEV = DESK ? 'Mac' : 'iPhone';
   const store = {
     get(k,d){ try{ const v = localStorage.getItem('tp_'+k); return v===null? d : JSON.parse(v);}catch(e){return d;} },
     set(k,v){ try{ localStorage.setItem('tp_'+k, JSON.stringify(v)); }catch(e){} }
@@ -273,8 +298,12 @@
     res: store.get('res','1080'),
     gain: store.get('gain',18),
     nr: store.get('nr','leve'),
-    fps: store.get('fps',30)
+    fps: store.get('fps',30),
+    camId: store.get('camId',''),
+    micId: store.get('micId','')
   };
+  // no computador a câmera sempre "olha para você": prévia espelhada como selfie
+  const selfie = () => DESK || S.front;
   const save = () => { Object.keys(S).forEach(k=>store.set(k,S[k])); store.set('wpm',S.speed); };
 
   // ---------- edição ----------
@@ -350,7 +379,10 @@
     textEl.innerHTML = html;
     textEl.style.fontSize = S.size+'px';
     textEl.style.textAlign = S.center?'center':'left';
-    textEl.style.paddingLeft = textEl.style.paddingRight = S.margin+'vw';
+    // no Mac a tela é larga: o texto fica numa coluna central (no máx. ~900 px),
+    // assim o olhar não "passeia" de um lado para o outro longe da câmera
+    textEl.style.paddingLeft = textEl.style.paddingRight =
+      DESK ? 'max('+S.margin+'vw, calc((100vw - 900px) / 2))' : S.margin+'vw';
     const camMode = $('play').classList.contains('camera');
     const boxH = camMode ? window.innerHeight*S.area/100 : window.innerHeight;
     $('play').style.setProperty('--area', S.area+'vh');
@@ -454,20 +486,28 @@
     stopCam();
     $('camErr').classList.add('hidden');
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-      camFail('Este navegador não liberou a câmera. Abra o link direto no Safari (endereço https), não dentro de outro app.'); return false;
+      camFail(DESK ? 'Este navegador não liberou a câmera. Abra o link https no Chrome ou no Safari.'
+                   : 'Este navegador não liberou a câmera. Abra o link direto no Safari (endereço https), não dentro de outro app.'); return false;
     }
     try{
-      stream = await navigator.mediaDevices.getUserMedia({
-        video:videoConstraints(),
-        audio:audioConstraints()
-      });
+      try{
+        stream = await navigator.mediaDevices.getUserMedia({ video:videoConstraints(), audio:audioConstraints() });
+      }catch(e){
+        // câmera/microfone escolhido foi desconectado: tenta com os padrões
+        if(!(S.camId||S.micId) || e.name==='NotAllowedError') throw e;
+        stream = await navigator.mediaDevices.getUserMedia({ video:videoConstraints(true), audio:audioConstraints(true) });
+        camFail('A câmera ou o microfone escolhido não foi encontrado. Usando o padrão do Mac.');
+      }
+      listDevices();
       cam.srcObject=stream;
       try{ await cam.play(); }catch(e){}
       await new Promise(r=>{ if(cam.videoWidth) r(); else { cam.onloadedmetadata=()=>r(); setTimeout(r,2000); } });
       setupCanvas();
       return true;
     }catch(e){
-      camFail('Não consegui acessar a câmera/microfone ('+(e.name||'erro')+'). No iPhone: Ajustes › Safari › Câmera e Microfone › Permitir, e recarregue a página.');
+      camFail('Não consegui acessar a câmera/microfone ('+(e.name||'erro')+'). '+(DESK
+        ? 'No Mac: clique no ícone de câmera/cadeado na barra de endereço › Permitir. Se continuar, veja Ajustes do Sistema › Privacidade e Segurança › Câmera (e Microfone) e ative o navegador. Depois recarregue a página.'
+        : 'No iPhone: Ajustes › Safari › Câmera e Microfone › Permitir, e recarregue a página.'));
       return false;
     }
   }
@@ -491,7 +531,7 @@
   function setupCanvas(){
     if(rec && rec.state==='recording') return; // não muda o tamanho no meio da gravação
     const [w,h]=fitSize(); cv.width=w; cv.height=h;
-    cv.classList.toggle('selfie',S.front);
+    cv.classList.toggle('selfie',selfie());
     $('fmtTag').textContent = (S.fmt==='h' ? 'Horizontal' : 'Vertical')+' · '+cv.width+'×'+cv.height+' · '+camInfo()+' fps';
     $('fmtTag').classList.remove('hidden');
     layoutPreview();
@@ -502,6 +542,7 @@
     let w=W, h=W/r; if(h>H){ h=H; w=H*r; }
     Object.assign(cv.style,{width:w+'px',height:h+'px',left:((W-w)/2)+'px',top:((H-h)/2)+'px'});
     const portrait = H>W, rot=$('rotTag');
+    if(DESK){ rot.classList.add('hidden'); return; } // no Mac não tem o que girar
     if(stream && S.fmt==='h' && portrait){ rot.innerHTML='↻ Gire o iPhone para a <b>horizontal</b><br><small>para aproveitar toda a imagem</small>'; rot.classList.remove('hidden'); }
     else if(stream && S.fmt==='v' && !portrait){ rot.innerHTML='↺ Gire o iPhone para a <b>vertical</b><br><small>para aproveitar toda a imagem</small>'; rot.classList.remove('hidden'); }
     else rot.classList.add('hidden');
@@ -517,19 +558,49 @@
     }
     requestAnimationFrame(draw);
   }
-  function audioConstraints(){
+  function audioConstraints(noPick){
     const nr = S.nr!=='off';
-    return {
+    const a = {
       echoCancellation: S.nr==='forte',   // no iPhone isso liga o processamento de voz do sistema (filtro mais forte)
       noiseSuppression: nr,
       autoGainControl: false,
       sampleRate:{ideal:48000},
       channelCount:{ideal: S.nr==='forte' ? 1 : 2}
     };
+    if(DESK && S.micId && !noPick) a.deviceId = {exact:S.micId};
+    return a;
   }
-  function videoConstraints(){
+  function videoConstraints(noPick){
     const L = {'720':[1280,720],'1080':[1920,1080],'4k':[3840,2160]}[S.res] || [1920,1080];
-    return {facingMode:S.front?'user':'environment', width:{ideal:L[0]}, height:{ideal:L[1]}, frameRate:{ideal:S.fps, max:S.fps}};
+    const v = {width:{ideal:L[0]}, height:{ideal:L[1]}, frameRate:{ideal:S.fps, max:S.fps}};
+    if(DESK){ if(S.camId && !noPick) v.deviceId = {exact:S.camId}; }
+    else v.facingMode = S.front?'user':'environment';
+    return v;
+  }
+  // ---------- lista de câmeras e microfones (Mac) ----------
+  async function listDevices(){
+    if(!DESK || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    try{
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const fill = (sel, kind, key, def) => {
+        const list = all.filter(d=>d.kind===kind && d.deviceId && d.deviceId!=='default' && d.deviceId!=='communications');
+        if(!list.length) return false;
+        sel.innerHTML = '';
+        sel.appendChild(new Option(def,''));
+        list.forEach((d,i)=> sel.appendChild(new Option(d.label || (kind==='videoinput'?'Câmera ':'Microfone ')+(i+1), d.deviceId)));
+        if(S[key] && !list.some(d=>d.deviceId===S[key])) S[key]=''; // aparelho escolhido não está conectado
+        sel.value = S[key];
+        return list.some(d=>d.label);
+      };
+      const named = fill($('camSel'),'videoinput','camId','Câmera padrão do Mac');
+      fill($('micSel'),'audioinput','micId','Microfone padrão do Mac');
+      if(named) $('devHelp').textContent = 'Conectou uma webcam, microfone ou o iPhone agora? Ele aparece na lista sozinho; se não aparecer, recarregue a página.';
+    }catch(e){}
+  }
+  $('camSel').addEventListener('change',e=>{ S.camId=e.target.value; save(); refreshCaps(); });
+  $('micSel').addEventListener('change',e=>{ S.micId=e.target.value; save(); });
+  if(navigator.mediaDevices && navigator.mediaDevices.addEventListener){
+    navigator.mediaDevices.addEventListener('devicechange', listDevices);
   }
   function camFail(msg){ const b=$('camErr'); b.textContent=msg; b.classList.remove('hidden'); }
   function stopCam(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } cam.srcObject=null; $('rotTag').classList.add('hidden'); $('fmtTag').classList.add('hidden'); }
@@ -588,13 +659,14 @@
     }catch(e){ return stream.getAudioTracks()[0] || null; }
   }
   function pickMime(){
-    const opts=['video/mp4;codecs=avc1','video/mp4','video/webm;codecs=vp9,opus','video/webm'];
+    // MP4 (H.264 + AAC) primeiro: abre em tudo e o YouTube aceita direto; WebM só se não houver outro jeito
+    const opts=['video/mp4;codecs=avc1,mp4a.40.2','video/mp4;codecs=avc1','video/mp4','video/webm;codecs=vp9,opus','video/webm'];
     for(const m of opts){ try{ if(window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m; }catch(e){} }
     return '';
   }
   async function startRec(){
     if(!stream){ camFail('Câmera desligada. Volte e ative “Gravar com a câmera”.'); return; }
-    if(!window.MediaRecorder){ camFail('Este iPhone/navegador não suporta gravação pela página. Atualize o iOS.'); return; }
+    if(!window.MediaRecorder){ camFail(DESK ? 'Este navegador não suporta gravação pela página. Use o Chrome atualizado.' : 'Este iPhone/navegador não suporta gravação pela página. Atualize o iOS.'); return; }
     const mime=pickMime(); lastExt = mime.includes('webm')?'webm':'mp4';
     chunks=[];
     let out;
@@ -639,7 +711,7 @@
     if(lastUrl) URL.revokeObjectURL(lastUrl);
     lastUrl = URL.createObjectURL(lastBlob);
     $('playback').src=lastUrl;
-    $('saveMsg').textContent = recovered===true ? 'Gravação recuperada. Salve na Galeria para não perder.' : '';
+    $('saveMsg').textContent = recovered===true ? (DESK ? 'Gravação recuperada. Baixe o vídeo para não perder.' : 'Gravação recuperada. Salve na Galeria para não perder.') : '';
     $('play').classList.add('hidden'); $('review').classList.remove('hidden');
     stopCam();
   }
@@ -647,6 +719,12 @@
   $('rSave').onclick = async ()=>{
     const name='video-'+new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')+'.'+lastExt;
     const file=new File([lastBlob],name,{type:lastBlob.type||'video/mp4'});
+    if(DESK){ // no Mac: baixa direto para a pasta Downloads
+      DB.clear();
+      const a=document.createElement('a'); a.href=lastUrl; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+      $('saveMsg').textContent='Vídeo salvo na pasta Downloads: '+name+(lastExt==='webm'?' (formato WebM — o YouTube aceita normalmente).':'');
+      return;
+    }
     try{
       if(navigator.canShare && navigator.canShare({files:[file]})){
         await navigator.share({files:[file]});
@@ -687,35 +765,52 @@
     }catch(e){}
     if(!window.isSecureContext){
       $('permState').textContent='precisa de link https';
-      $('permHelp').innerHTML='O iPhone só libera câmera em páginas abertas por um endereço <b>https</b> no Safari. Abra pelo link publicado (não pelo arquivo).';
+      $('permHelp').innerHTML= DESK ? 'O navegador só libera a câmera em páginas abertas por um endereço <b>https</b>. Abra pelo link publicado (não pelo arquivo).'
+        : 'O iPhone só libera câmera em páginas abertas por um endereço <b>https</b> no Safari. Abra pelo link publicado (não pelo arquivo).';
     }
   }
   function setPermUI(state){
     const map={granted:'✅ liberada',denied:'❌ bloqueada',prompt:'aguardando'};
     $('permState').textContent = map[state] || state;
-    if(state==='granted'){ $('permBtn').textContent='✅ Câmera e microfone liberados'; }
+    if(state==='granted'){ $('permBtn').textContent='✅ Câmera e microfone liberados'; listDevices(); }
     if(state==='denied'){
-      $('permHelp').innerHTML='O Safari bloqueou. No iPhone: toque em <b>“aA”</b> na barra de endereço › <b>Ajustes do Site</b> › Câmera e Microfone › <b>Permitir</b>. Ou em Ajustes › Apps › Safari › Câmera / Microfone › Permitir. Depois recarregue a página.';
+      $('permHelp').innerHTML= DESK
+        ? 'O navegador bloqueou. Clique no ícone de <b>câmera/cadeado</b> na barra de endereço › Câmera e Microfone › <b>Permitir</b>. Se ainda não funcionar: Ajustes do Sistema › Privacidade e Segurança › <b>Câmera</b> e <b>Microfone</b> › ative o Chrome/Safari. Depois recarregue a página.'
+        : 'O Safari bloqueou. No iPhone: toque em <b>“aA”</b> na barra de endereço › <b>Ajustes do Site</b> › Câmera e Microfone › <b>Permitir</b>. Ou em Ajustes › Apps › Safari › Câmera / Microfone › Permitir. Depois recarregue a página.';
     }
+  }
+  if(DESK){
+    $('permHelp').innerHTML='Clique no botão e, quando o navegador perguntar, escolha <b>Permitir</b>. Isso só precisa ser feito uma vez.';
+    $('rSave').textContent='Baixar vídeo';
+  }
+  // ao trocar de câmera no Mac, mostra a resolução máxima que ela aceita
+  async function refreshCaps(){
+    if(!$('permState').textContent.includes('liberada')) return;
+    try{
+      const st = await navigator.mediaDevices.getUserMedia({video:videoConstraints()});
+      await showCaps(st); st.getTracks().forEach(t=>t.stop());
+    }catch(e){ $('capInfo').textContent='Não consegui abrir essa câmera agora ('+(e.name||'erro')+').'; }
   }
   async function showCaps(st){
     try{
       const vt=st.getVideoTracks()[0];
       const set=vt.getSettings(); const caps=vt.getCapabilities?vt.getCapabilities():null;
       let txt='Agora: '+set.width+'×'+set.height+' a '+Math.round(set.frameRate||0)+' fps.';
-      if(caps && caps.width) txt+=' Sua câmera '+(S.front?'frontal':'traseira')+' aceita até '+caps.width.max+'×'+caps.height.max+(caps.frameRate?' e até '+Math.round(caps.frameRate.max)+' fps':'')+'.';
+      if(caps && caps.width) txt+=' '+(DESK ? 'Essa câmera' : 'Sua câmera '+(S.front?'frontal':'traseira'))+' aceita até '+caps.width.max+'×'+caps.height.max+(caps.frameRate?' e até '+Math.round(caps.frameRate.max)+' fps':'')+'.';
       $('capInfo').textContent=txt;
     }catch(e){}
   }
   $('permBtn').onclick = async ()=>{
     try{
-      const st = await navigator.mediaDevices.getUserMedia({video:videoConstraints(), audio:true});
+      let st;
+      try{ st = await navigator.mediaDevices.getUserMedia({video:videoConstraints(), audio:true}); }
+      catch(e){ if(e.name==='NotAllowedError' || !S.camId) throw e; S.camId=''; save(); st = await navigator.mediaDevices.getUserMedia({video:videoConstraints(), audio:true}); }
       await showCaps(st);
       st.getTracks().forEach(t=>t.stop());
       setPermUI('granted');
     }catch(e){
       setPermUI(e.name==='NotAllowedError'?'denied':'erro');
-      if(e.name!=='NotAllowedError') $('permHelp').textContent='Não foi possível abrir a câmera ('+(e.name||'erro')+'). Confira se o link é https e se está no Safari.';
+      if(e.name!=='NotAllowedError') $('permHelp').textContent='Não foi possível abrir a câmera ('+(e.name||'erro')+'). '+(DESK ? 'Confira se o link é https e se outro programa (Zoom, Meet, FaceTime) não está usando a câmera.' : 'Confira se o link é https e se está no Safari.');
     }
   };
   checkPerm();
@@ -726,6 +821,8 @@
 
   async function enterPlay(){
     S.text=ta.value; save();
+    // no Mac abre em tela cheia (precisa ser logo no clique, antes de qualquer espera)
+    if(DESK){ try{ const r=document.documentElement; (r.requestFullscreen||r.webkitRequestFullscreen).call(r).catch(()=>{}); }catch(e){} }
     $('edit').classList.add('hidden'); $('play').classList.remove('hidden');
     $('play').classList.toggle('camera', S.cam);
     $('recBtn').classList.toggle('hidden', !S.cam);
@@ -752,6 +849,7 @@
     $('tMirror').classList.toggle('on',S.mirror);
     try{ wakeLock && wakeLock.release(); }catch(e){}
     try{ document.fullscreenElement && document.exitFullscreen(); }catch(e){}
+    try{ document.webkitFullscreenElement && document.webkitExitFullscreen(); }catch(e){}
   }
 
   const stop = e => e.stopPropagation();
@@ -801,11 +899,20 @@
   window.addEventListener('orientationchange', ()=>setTimeout(onRotate,300));
   document.addEventListener('keydown',e=>{
     if($('play').classList.contains('hidden')) return;
-    if(e.code==='Space'){ e.preventDefault(); setPlaying(!playing); }
-    if(e.key==='ArrowUp'){ y-=60; apply(); }
-    if(e.key==='ArrowDown'){ y+=60; apply(); }
-    if(e.key==='Escape') exitPlay();
+    if(e.metaKey || e.ctrlKey || e.altKey) return;
+    // evita que o espaço "clique" de novo no último botão usado
+    if(document.activeElement && document.activeElement!==document.body) document.activeElement.blur();
+    const k=e.key.toLowerCase();
+    if(e.code==='Space'){ e.preventDefault(); if($('count').classList.contains('hidden')) setPlaying(!playing); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); y-=60; apply(); }
+    else if(e.key==='ArrowDown'){ e.preventDefault(); y+=60; apply(); }
+    else if(k==='r' && S.cam){ e.preventDefault(); $('recBtn').click(); }
+    else if(e.key==='+' || e.key==='=' || e.key==='ArrowRight'){ e.preventDefault(); $('bFast').click(); }
+    else if(e.key==='-' || e.key==='_' || e.key==='ArrowLeft'){ e.preventDefault(); $('bSlow').click(); }
+    else if(e.key==='Escape'){ if(!document.fullscreenElement && !document.webkitFullscreenElement) exitPlay(); }
   });
+  // no Mac, o 1º Esc sai da tela cheia (o navegador faz isso sozinho); o 2º Esc volta para a tela do texto
+  listDevices();
 })();
 </script>
 </body>
