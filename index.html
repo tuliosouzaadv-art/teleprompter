@@ -151,6 +151,15 @@
       <div class="tip" style="margin-top:6px">Aumenta o volume da voz na gravação, com proteção contra estouro. Se a voz sair baixa, suba; se sair chiando ou com muito ruído de fundo, desça.</div>
     </div>
     <div class="row">
+      <label>Redução de ruído</label>
+      <div class="seg" id="nrSeg">
+        <button class="chip" data-v="off">Desligada<br><small>som natural</small></button>
+        <button class="chip" data-v="leve">Leve<br><small>ar-condicionado, chiado</small></button>
+        <button class="chip" data-v="forte">Forte<br><small>ambiente barulhento</small></button>
+      </div>
+      <div class="tip" style="margin-top:6px">Leve: corta zumbido grave e chiado de fundo. Forte: além disso, abaixa o som do ambiente nas pausas entre as frases (pode deixar a voz um pouco mais “abafada”).</div>
+    </div>
+    <div class="row">
       <label>Formato do vídeo</label>
       <div class="seg" id="fmtSeg">
         <button class="chip" data-v="v">▯ Vertical 9:16<br><small>Reels / Stories / TikTok</small></button>
@@ -263,6 +272,7 @@
     fmt: store.get('fmt','v'),
     res: store.get('res','1080'),
     gain: store.get('gain',18),
+    nr: store.get('nr','leve'),
     fps: store.get('fps',30)
   };
   const save = () => { Object.keys(S).forEach(k=>store.set(k,S[k])); store.set('wpm',S.speed); };
@@ -312,7 +322,7 @@
       });
     });
   }
-  bindSeg('resSeg','res',false); bindSeg('fpsSeg','fps',true);
+  bindSeg('resSeg','res',false); bindSeg('nrSeg','nr',false); bindSeg('fpsSeg','fps',true);
   document.querySelectorAll('#fmtSeg .chip').forEach(b=>{
     b.classList.toggle('on', b.dataset.v===S.fmt);
     b.addEventListener('click',()=>{
@@ -449,7 +459,7 @@
     try{
       stream = await navigator.mediaDevices.getUserMedia({
         video:videoConstraints(),
-        audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:false, sampleRate:{ideal:48000}, channelCount:{ideal:2}}
+        audio:audioConstraints()
       });
       cam.srcObject=stream;
       try{ await cam.play(); }catch(e){}
@@ -507,6 +517,16 @@
     }
     requestAnimationFrame(draw);
   }
+  function audioConstraints(){
+    const nr = S.nr!=='off';
+    return {
+      echoCancellation: S.nr==='forte',   // no iPhone isso liga o processamento de voz do sistema (filtro mais forte)
+      noiseSuppression: nr,
+      autoGainControl: false,
+      sampleRate:{ideal:48000},
+      channelCount:{ideal: S.nr==='forte' ? 1 : 2}
+    };
+  }
   function videoConstraints(){
     const L = {'720':[1280,720],'1080':[1920,1080],'4k':[3840,2160]}[S.res] || [1920,1080];
     return {facingMode:S.front?'user':'environment', width:{ideal:L[0]}, height:{ideal:L[1]}, frameRate:{ideal:S.fps, max:S.fps}};
@@ -515,20 +535,55 @@
   function stopCam(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } cam.srcObject=null; $('rotTag').classList.add('hidden'); $('fmtTag').classList.add('hidden'); }
   // Voz: ganho ajustável + compressor suave + limitador (não deixa estourar)
   let actx=null;
-  function processedAudioTrack(){
+  const GATE_CODE = `
+  class Gate extends AudioWorkletProcessor{
+    constructor(o){ super(); const p=(o&&o.processorOptions)||{}; this.depth=p.depth||0.25; this.env=0; this.floor=1e-3; this.g=1; }
+    process(inp,out){
+      const i=inp[0], o=out[0]; if(!i||!i[0]){ return true; }
+      const n=i[0].length; let sum=0;
+      for(let c=0;c<i.length;c++){ const ch=i[c]; for(let k=0;k<n;k++) sum+=ch[k]*ch[k]; }
+      const rms=Math.sqrt(sum/(n*i.length))+1e-9;
+      this.env = rms>this.env ? this.env*0.6+rms*0.4 : this.env*0.97+rms*0.03;
+      // piso de ruído: desce rápido, sobe devagar
+      this.floor = this.env<this.floor ? this.env : this.floor*1.0015;
+      const open = this.env > this.floor*2.2; // ~7 dB acima do ruído = voz
+      const target = open ? 1 : this.depth;
+      this.g += (target-this.g) * (open ? 0.5 : 0.04);
+      for(let c=0;c<o.length;c++){ const src=i[c]||i[0], dst=o[c]; for(let k=0;k<n;k++) dst[k]=src[k]*this.g; }
+      return true;
+    }
+  }
+  registerProcessor('gate', Gate);`;
+  let gateLoaded=false;
+  async function processedAudioTrack(){
     try{
       const at = stream.getAudioTracks()[0]; if(!at) return null;
       const AC = window.AudioContext || window.webkitAudioContext; if(!AC) return at;
       if(!actx) actx = new AC({sampleRate:48000});
       if(actx.state==='suspended') actx.resume();
       const src = actx.createMediaStreamSource(new MediaStream([at]));
+      let head = src;
+      if(S.nr!=='off'){
+        const hp = actx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value = S.nr==='forte'?110:85; hp.Q.value=0.7;
+        const lp = actx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value = S.nr==='forte'?10000:14000; lp.Q.value=0.7;
+        head.connect(hp); hp.connect(lp); head=lp;
+      }
       const comp = actx.createDynamicsCompressor();
       comp.threshold.value=-30; comp.knee.value=12; comp.ratio.value=3; comp.attack.value=0.005; comp.release.value=0.25;
       const g = actx.createGain(); g.gain.value = Math.pow(10, S.gain/20);
       const lim = actx.createDynamicsCompressor();
       lim.threshold.value=-2; lim.knee.value=0; lim.ratio.value=20; lim.attack.value=0.001; lim.release.value=0.1;
       const dst = actx.createMediaStreamDestination();
-      src.connect(comp); comp.connect(g); g.connect(lim); lim.connect(dst);
+      head.connect(comp); comp.connect(g);
+      let pre = g;
+      if(S.nr==='forte' && actx.audioWorklet){
+        try{
+          if(!gateLoaded){ const u=URL.createObjectURL(new Blob([GATE_CODE],{type:'application/javascript'})); await actx.audioWorklet.addModule(u); gateLoaded=true; }
+          const gate = new AudioWorkletNode(actx,'gate',{processorOptions:{depth:0.25}}); // pausas ~12 dB mais baixas
+          g.connect(gate); pre = gate;
+        }catch(e){}
+      }
+      pre.connect(lim); lim.connect(dst);
       return dst.stream.getAudioTracks()[0] || at;
     }catch(e){ return stream.getAudioTracks()[0] || null; }
   }
@@ -537,7 +592,7 @@
     for(const m of opts){ try{ if(window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m; }catch(e){} }
     return '';
   }
-  function startRec(){
+  async function startRec(){
     if(!stream){ camFail('Câmera desligada. Volte e ative “Gravar com a câmera”.'); return; }
     if(!window.MediaRecorder){ camFail('Este iPhone/navegador não suporta gravação pela página. Atualize o iOS.'); return; }
     const mime=pickMime(); lastExt = mime.includes('webm')?'webm':'mp4';
@@ -546,7 +601,7 @@
     const fps=camInfo();
     const vw=cam.videoWidth, vh=cam.videoHeight;
     const direct = vw===cv.width && vh===cv.height; // câmera já está no formato: grava direto, sem nenhuma etapa intermediária
-    const aTrack = processedAudioTrack();
+    const aTrack = await processedAudioTrack();
     if(direct){
       out = new MediaStream([stream.getVideoTracks()[0]].concat(aTrack?[aTrack]:[]));
     } else {
