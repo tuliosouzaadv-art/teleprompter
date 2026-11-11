@@ -80,6 +80,10 @@
   #recBtn::after{content:"";position:absolute;inset:8px;border-radius:50%;background:#e5322d;transition:.2s}
   #recBtn.rec::after{inset:16px;border-radius:5px}
   #recTag{position:absolute;top:calc(14px + env(safe-area-inset-top));right:14px;background:#e5322d;color:#fff;font-weight:700;font-size:13px;padding:5px 10px;border-radius:999px}
+  #micMeter{position:absolute;top:calc(44px + env(safe-area-inset-top));left:14px;display:flex;align-items:center;gap:6px;background:rgba(0,0,0,.6);padding:4px 9px;border-radius:999px;font-size:12px;color:#fff}
+  #micMeter .track{width:90px;height:6px;background:rgba(255,255,255,.18);border-radius:3px;overflow:hidden}
+  #micFill{height:100%;width:0;background:#3ecf6b;transition:width .08s linear}
+  #micWarn{position:absolute;top:calc(74px + env(safe-area-inset-top));left:14px;max-width:360px;background:rgba(229,50,45,.95);color:#fff;font-size:13px;line-height:1.4;padding:8px 11px;border-radius:10px}
   #camErr{position:absolute;left:12px;right:12px;bottom:90px;background:rgba(229,50,45,.95);color:#fff;padding:12px;border-radius:10px;font-size:14px;line-height:1.4}
   #review{position:fixed;inset:0;background:#000;display:flex;flex-direction:column}
   #review video{flex:1;width:100%;min-height:0;background:#000}
@@ -240,6 +244,8 @@
   <div id="progress"></div>
   <div id="pausedTag" class="hidden">PAUSADO</div>
   <div id="fmtTag" class="hidden"></div>
+  <div id="micMeter" class="hidden">🎤<div class="track"><div id="micFill"></div></div></div>
+  <div id="micWarn" class="hidden">O microfone não está captando som. Fale algo para testar; se a barra continuar parada, volte (✕) e escolha outro microfone na lista.</div>
   <div id="rotTag" class="hidden"></div>
   <div id="recTag" class="hidden">● REC <span id="recTime">0:00</span></div>
   <div id="camErr" class="hidden"></div>
@@ -503,6 +509,8 @@
       try{ await cam.play(); }catch(e){}
       await new Promise(r=>{ if(cam.videoWidth) r(); else { cam.onloadedmetadata=()=>r(); setTimeout(r,2000); } });
       setupCanvas();
+      // já liga o tratamento de áudio e o medidor, para você ver se a voz chega antes de gravar
+      if(stream.getAudioTracks().length){ silentSince=0; $('micMeter').classList.remove('hidden'); processedAudioTrack(); }
       return true;
     }catch(e){
       camFail('Não consegui acessar a câmera/microfone ('+(e.name||'erro')+'). '+(DESK
@@ -556,6 +564,7 @@
       ctx.imageSmoothingQuality='high';
       ctx.drawImage(cam,(cw-dw)/2,(ch-dh)/2,dw,dh);
     }
+    meterTick();
     requestAnimationFrame(draw);
   }
   function audioConstraints(noPick){
@@ -603,9 +612,41 @@
     navigator.mediaDevices.addEventListener('devicechange', listDevices);
   }
   function camFail(msg){ const b=$('camErr'); b.textContent=msg; b.classList.remove('hidden'); }
-  function stopCam(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } cam.srcObject=null; $('rotTag').classList.add('hidden'); $('fmtTag').classList.add('hidden'); }
+  function stopCam(){
+    if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+    cam.srcObject=null; $('rotTag').classList.add('hidden'); $('fmtTag').classList.add('hidden');
+    $('micMeter').classList.add('hidden'); $('micWarn').classList.add('hidden');
+    teardownAudio();
+  }
   // Voz: ganho ajustável + compressor suave + limitador (não deixa estourar)
-  let actx=null;
+  let actx=null, aNodes=[], aTrackOut=null, analyser=null, aBuf=null, silentSince=0;
+  // Cria/acorda o processador de áudio. Precisa rodar DENTRO do clique/tecla (regra do Safari),
+  // senão ele fica "dormindo" e a gravação sai sem som.
+  function wakeAudio(){
+    try{
+      const AC = window.AudioContext || window.webkitAudioContext; if(!AC) return;
+      if(!actx) actx = new AC({sampleRate:48000});
+      if(actx.state!=='running') actx.resume().catch(()=>{});
+    }catch(e){}
+  }
+  function teardownAudio(){
+    aNodes.forEach(n=>{ try{ n.disconnect(); }catch(e){} });
+    aNodes=[]; aTrackOut=null; analyser=null;
+  }
+  // medidor do microfone (barra verde no canto) + aviso se ficar em silêncio
+  function meterTick(){
+    if(!analyser || !stream) return;
+    if(!aBuf || aBuf.length!==analyser.fftSize) aBuf=new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(aBuf);
+    let peak=0; for(let i=0;i<aBuf.length;i++){ const v=Math.abs(aBuf[i]); if(v>peak) peak=v; }
+    const db = 20*Math.log10(peak+1e-6);               // -60 dB (silêncio) … 0 dB (máximo)
+    const pct = Math.max(0, Math.min(100, (db+60)/60*100));
+    $('micFill').style.width = pct+'%';
+    $('micFill').style.background = db>-3 ? '#e5322d' : db>-12 ? '#d4a24c' : '#3ecf6b';
+    const now=performance.now();
+    if(db>-50){ silentSince=0; $('micWarn').classList.add('hidden'); }
+    else { if(!silentSince) silentSince=now; else if(now-silentSince>4000) $('micWarn').classList.remove('hidden'); }
+  }
   const GATE_CODE = `
   class Gate extends AudioWorkletProcessor{
     constructor(o){ super(); const p=(o&&o.processorOptions)||{}; this.depth=p.depth||0.25; this.env=0; this.floor=1e-3; this.g=1; }
@@ -626,18 +667,31 @@
   }
   registerProcessor('gate', Gate);`;
   let gateLoaded=false;
-  async function processedAudioTrack(){
+  let aPending=null;
+  function processedAudioTrack(){
+    if(aTrackOut && aTrackOut.readyState==='live') return Promise.resolve(aTrackOut);
+    if(!aPending) aPending = makeAudioTrack().finally(()=>{ aPending=null; });
+    return aPending;
+  }
+  async function makeAudioTrack(){
+    const raw = stream && stream.getAudioTracks()[0]; if(!raw) return null;
+    teardownAudio();
     try{
-      const at = stream.getAudioTracks()[0]; if(!at) return null;
-      const AC = window.AudioContext || window.webkitAudioContext; if(!AC) return at;
-      if(!actx) actx = new AC({sampleRate:48000});
-      if(actx.state==='suspended') actx.resume();
-      const src = actx.createMediaStreamSource(new MediaStream([at]));
-      let head = src;
+      wakeAudio(); if(!actx) return raw;
+      if(actx.state!=='running'){ try{ await Promise.race([actx.resume(), new Promise(r=>setTimeout(r,800))]); }catch(e){} }
+      if(actx.state!=='running') return raw; // processador não acordou: grava o som direto do microfone
+      const track = await buildAudio(raw);
+      aTrackOut = track; return track;
+    }catch(e){ return raw; }
+  }
+  async function buildAudio(at){
+      const keep = n => (aNodes.push(n), n);
+      const src = keep(actx.createMediaStreamSource(new MediaStream([at])));
+      let head = src, hpN=null, lpN=null, gateN=null;
       if(S.nr!=='off'){
         const hp = actx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value = S.nr==='forte'?110:85; hp.Q.value=0.7;
         const lp = actx.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value = S.nr==='forte'?10000:14000; lp.Q.value=0.7;
-        head.connect(hp); hp.connect(lp); head=lp;
+        head.connect(hp); hp.connect(lp); head=lp; hpN=hp; lpN=lp;
       }
       const comp = actx.createDynamicsCompressor();
       comp.threshold.value=-30; comp.knee.value=12; comp.ratio.value=3; comp.attack.value=0.005; comp.release.value=0.25;
@@ -651,12 +705,16 @@
         try{
           if(!gateLoaded){ const u=URL.createObjectURL(new Blob([GATE_CODE],{type:'application/javascript'})); await actx.audioWorklet.addModule(u); gateLoaded=true; }
           const gate = new AudioWorkletNode(actx,'gate',{processorOptions:{depth:0.25}}); // pausas ~12 dB mais baixas
-          g.connect(gate); pre = gate;
+          g.connect(gate); pre = gate; gateN = gate;
         }catch(e){}
       }
       pre.connect(lim); lim.connect(dst);
+      // medidor lê o som já tratado (o que vai para o vídeo)
+      analyser = keep(actx.createAnalyser()); analyser.fftSize=1024; lim.connect(analyser);
+      // saída muda para o alto-falante: no Safari, sem isso o processador pode não "rodar" e o áudio sai vazio
+      const mute = keep(actx.createGain()); mute.gain.value=0; lim.connect(mute); mute.connect(actx.destination);
+      [hpN,lpN,comp,g,lim,dst,gateN].forEach(n=>n&&keep(n));
       return dst.stream.getAudioTracks()[0] || at;
-    }catch(e){ return stream.getAudioTracks()[0] || null; }
   }
   function pickMime(){
     // MP4 (H.264 + AAC) primeiro: abre em tudo e o YouTube aceita direto; WebM só se não houver outro jeito
@@ -665,6 +723,7 @@
     return '';
   }
   async function startRec(){
+    wakeAudio(); // ainda dentro do clique/tecla R
     if(!stream){ camFail('Câmera desligada. Volte e ative “Gravar com a câmera”.'); return; }
     if(!window.MediaRecorder){ camFail(DESK ? 'Este navegador não suporta gravação pela página. Use o Chrome atualizado.' : 'Este iPhone/navegador não suporta gravação pela página. Atualize o iOS.'); return; }
     const mime=pickMime(); lastExt = mime.includes('webm')?'webm':'mp4';
@@ -689,8 +748,10 @@
     catch(e){ try{ rec = new MediaRecorder(out, mime?{mimeType:mime}:undefined); }catch(e2){ rec = new MediaRecorder(out); } }
     $('fmtTag').textContent += ' · '+Math.round(bps/1e6)+' Mbps';
     rec.ondataavailable=e=>{ if(e.data && e.data.size){ chunks.push(e.data);
-      const t=e.data.type; e.data.arrayBuffer().then(buf=>DB.addChunk({buf, type:t})).catch(()=>{}); } };
-    DB.clear().then(()=>DB.setMeta({started:Date.now(), ext:lastExt, done:false}));
+      // cópia de segurança só no iPhone (lá uma ligação pode interromper a gravação).
+      // No Mac ela deixava o app lento ao terminar, então fica desligada.
+      if(!DESK){ const t=e.data.type; e.data.arrayBuffer().then(buf=>DB.addChunk({buf, type:t})).catch(()=>{}); } } };
+    if(!DESK) DB.clear().then(()=>DB.setMeta({started:Date.now(), ext:lastExt, done:false}));
     rec.onstop=showReview;
     y=0; apply();
     countdown(()=>{
@@ -821,6 +882,7 @@
 
   async function enterPlay(){
     S.text=ta.value; save();
+    if(S.cam) wakeAudio(); // dentro do clique em Começar / Gravar de novo
     // no Mac abre em tela cheia (precisa ser logo no clique, antes de qualquer espera)
     if(DESK){ try{ const r=document.documentElement; (r.requestFullscreen||r.webkitRequestFullscreen).call(r).catch(()=>{}); }catch(e){} }
     $('edit').classList.add('hidden'); $('play').classList.remove('hidden');
