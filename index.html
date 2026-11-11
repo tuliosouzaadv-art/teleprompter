@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Teleprompter">
+<meta name="theme-color" content="#0b0b0d">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>Teleprompter</title>
+<style>
+  :root{--bg:#0b0b0d;--panel:#16161a;--line:#2a2a31;--txt:#f4f4f5;--mut:#9a9aa3;--acc:#d4a24c;}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  button{font:inherit;color:inherit;cursor:pointer}
+  .hidden{display:none!important}
+
+  /* ---------- Tela de edição ---------- */
+  #edit{max-width:720px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(40px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left))}
+  h1{font-size:20px;margin:4px 0 2px}
+  .sub{color:var(--mut);font-size:13px;margin-bottom:14px}
+  textarea{width:100%;height:42vh;min-height:220px;background:var(--panel);color:var(--txt);border:1px solid var(--line);border-radius:12px;padding:14px;font-size:16px;line-height:1.5;resize:vertical}
+  .meta{display:flex;justify-content:space-between;color:var(--mut);font-size:12px;margin:6px 2px 14px}
+  .grid{display:grid;grid-template-columns:1fr;gap:12px}
+  .row{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .row label{display:flex;justify-content:space-between;font-size:14px;margin-bottom:8px}
+  .row label b{color:var(--acc);font-weight:600}
+  input[type=range]{width:100%;accent-color:var(--acc)}
+  .toggles{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{background:transparent;border:1px solid var(--line);border-radius:999px;padding:8px 14px;font-size:14px}
+  .chip.on{background:var(--acc);border-color:var(--acc);color:#111;font-weight:600}
+  .seg{display:flex;gap:6px}
+  .seg .chip{flex:1;text-align:center;border-radius:12px}
+  .seg .chip small{font-weight:400;opacity:.75;font-size:11px}
+  .start{width:100%;margin-top:16px;background:var(--acc);color:#111;border:0;border-radius:14px;padding:16px;font-size:18px;font-weight:700}
+  .tip{color:var(--mut);font-size:12.5px;line-height:1.5;margin-top:14px}
+  .tip code{background:var(--panel);padding:1px 5px;border-radius:4px;color:var(--acc)}
+
+  /* ---------- Tela do prompter ---------- */
+  #play{position:fixed;inset:0;background:#000;overflow:hidden;touch-action:none}
+  #stage{position:absolute;inset:0;overflow:hidden}
+  #scroller{position:absolute;left:0;right:0;top:0;will-change:transform}
+  #text{white-space:pre-wrap;word-wrap:break-word;font-weight:600;line-height:1.35;color:#fff}
+  #text .dir{color:var(--acc);font-style:italic;font-weight:500;font-size:.55em;display:inline-block;opacity:.9}
+  .mirror #scroller{transform-origin:center}
+  #guide{position:absolute;left:0;right:0;height:0;border-top:2px solid rgba(212,162,76,.55);pointer-events:none}
+  #guide::before,#guide::after{content:"";position:absolute;top:-9px;border:8px solid transparent}
+  #guide::before{left:0;border-left-color:var(--acc)}
+  #guide::after{right:0;border-right-color:var(--acc)}
+  #fadeTop,#fadeBot{position:absolute;left:0;right:0;pointer-events:none}
+  #fadeTop{top:0;height:12%;background:linear-gradient(#000,transparent)}
+  #fadeBot{bottom:0;height:22%;background:linear-gradient(transparent,#000)}
+  #bar{position:absolute;left:0;right:0;bottom:0;padding:10px 10px calc(10px + env(safe-area-inset-bottom));display:flex;gap:6px;justify-content:center;align-items:center;background:rgba(10,10,12,.85);transition:opacity .3s}
+  #bar.faded{opacity:0;pointer-events:none}
+  #bar button{background:#222228;border:0;border-radius:10px;flex:1 1 0;min-width:0;max-width:56px;height:44px;padding:0;font-size:15px}
+  #bar .big{background:var(--acc);color:#111;font-weight:700;min-width:54px}
+  #bar .lbl{font-size:11px;color:var(--mut);text-align:center;flex:0 0 34px}
+  #progress{position:absolute;top:0;left:0;height:3px;background:var(--acc);width:0}
+  #count{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:30vw;font-weight:800;color:var(--acc);background:rgba(0,0,0,.6)}
+  #pausedTag{position:absolute;top:14px;left:50%;transform:translateX(-50%);background:rgba(212,162,76,.95);color:#111;font-weight:700;font-size:13px;padding:5px 12px;border-radius:999px}
+
+  #cam{position:absolute;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none}
+  #preview{position:absolute;background:#000}
+  #preview.selfie{transform:scaleX(-1)}
+  #rotTag{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.8);color:#fff;border:1px solid var(--acc);padding:14px 18px;border-radius:12px;font-size:16px;text-align:center;line-height:1.4;pointer-events:none}
+  #fmtTag{position:absolute;top:calc(14px + env(safe-area-inset-top));left:14px;background:rgba(0,0,0,.6);color:#fff;font-size:12px;font-weight:600;padding:4px 9px;border-radius:999px}
+  #play.camera #stage{bottom:auto;height:var(--area);background:rgba(0,0,0,.55)}
+  #play.camera #fadeTop,#play.camera #fadeBot{display:none}
+  #play.camera #text{text-shadow:0 2px 6px rgba(0,0,0,.9)}
+  #recBtn{flex:0 0 52px!important;width:52px;height:52px!important;max-width:none!important;border-radius:50%!important;background:#fff!important;position:relative;padding:0!important}
+  #recBtn::after{content:"";position:absolute;inset:8px;border-radius:50%;background:#e5322d;transition:.2s}
+  #recBtn.rec::after{inset:16px;border-radius:5px}
+  #recTag{position:absolute;top:calc(14px + env(safe-area-inset-top));right:14px;background:#e5322d;color:#fff;font-weight:700;font-size:13px;padding:5px 10px;border-radius:999px}
+  #camErr{position:absolute;left:12px;right:12px;bottom:90px;background:rgba(229,50,45,.95);color:#fff;padding:12px;border-radius:10px;font-size:14px;line-height:1.4}
+  #review{position:fixed;inset:0;background:#000;display:flex;flex-direction:column}
+  #review video{flex:1;width:100%;min-height:0;background:#000}
+  #review .acts{display:flex;flex-wrap:wrap;gap:8px;padding:12px 12px calc(12px + env(safe-area-inset-bottom))}
+  #review .acts button{flex:1 1 45%;border:0;border-radius:12px;padding:14px;font-size:16px;background:#222228}
+  #review .acts .pri{background:var(--acc);color:#111;font-weight:700}
+  #saveMsg{color:var(--mut);font-size:12.5px;padding:0 14px;line-height:1.4}
+</style>
+</head>
+<body>
+
+<!-- ======== EDIÇÃO ======== -->
+<section id="edit">
+  <h1>Teleprompter</h1>
+  <div class="sub">Cole o roteiro, ajuste e toque em Começar.</div>
+
+  <div id="recoverBox" class="row hidden" style="border-color:var(--acc);margin-bottom:14px">
+    <label><b>⚠ Gravação recuperável</b></label>
+    <div class="tip" id="recoverInfo" style="margin:0 0 10px"></div>
+    <div class="seg"><button class="chip on" id="recoverYes">Recuperar vídeo</button><button class="chip" id="recoverNo">Descartar</button></div>
+  </div>
+  <textarea id="script" placeholder="Cole aqui o texto do vídeo..."></textarea>
+  <div class="meta"><span id="words">0 palavras</span><span id="eta">~0 s de leitura</span></div>
+
+  <div class="grid">
+    <div class="row">
+      <label>Velocidade <b id="vSpeed">140 ppm</b></label>
+      <input type="range" id="speed" min="80" max="220" step="5" value="140">
+      <div class="tip" style="margin-top:6px">Palavras por minuto. Fala calma ≈ 120 · conversa normal ≈ 140–150 · ritmo de Reels ≈ 160–180.</div>
+    </div>
+    <div class="row">
+      <label>Tamanho da letra <b id="vSize">44</b></label>
+      <input type="range" id="size" min="24" max="96" step="2" value="44">
+    </div>
+    <div class="row">
+      <label>Margem lateral <b id="vMargin">8%</b></label>
+      <input type="range" id="margin" min="0" max="25" step="1" value="8">
+    </div>
+    <div class="row">
+      <label>Posição da linha de leitura <b id="vGuide">25%</b></label>
+      <input type="range" id="guidePos" min="10" max="60" step="1" value="25">
+      <div class="tip" style="margin-top:6px">Mais perto do topo = seu olhar fica mais perto da câmera frontal. Na horizontal, use uma faixa de texto mais baixa (uns 35%) e letra menor.</div>
+    </div>
+    <div class="row">
+      <label>Câmera</label>
+      <div class="toggles">
+        <button class="chip on" id="tCam">Gravar com a câmera</button>
+        <button class="chip on" id="tFront">Câmera frontal</button>
+      </div>
+    </div>
+    <div class="row" id="permRow">
+      <label>Permissão de câmera e microfone <b id="permState">não verificada</b></label>
+      <button class="chip on" id="permBtn" style="width:100%;padding:12px">🎥 Permitir câmera e microfone</button>
+      <div class="tip" id="permHelp" style="margin-top:6px">Toque no botão e, quando o Safari perguntar, escolha <b>Permitir</b>. Isso só precisa ser feito uma vez.</div>
+    </div>
+    <div class="row">
+      <label>Resolução da câmera</label>
+      <div class="seg" id="resSeg">
+        <button class="chip" data-v="720">720p</button>
+        <button class="chip" data-v="1080">1080p<br><small>padrão</small></button>
+        <button class="chip" data-v="4k">4K<br><small>se disponível</small></button>
+      </div>
+      <div class="tip" id="capInfo" style="margin-top:6px"></div>
+    </div>
+    <div class="row">
+      <label>Quadros por segundo</label>
+      <div class="seg" id="fpsSeg">
+        <button class="chip" data-v="30">30 fps<br><small>padrão</small></button>
+        <button class="chip" data-v="60">60 fps<br><small>mais fluido</small></button>
+      </div>
+    </div>
+    <div class="row">
+      <label>Formato do vídeo</label>
+      <div class="seg" id="fmtSeg">
+        <button class="chip" data-v="v">▯ Vertical 9:16<br><small>Reels / Stories / TikTok</small></button>
+        <button class="chip" data-v="h">▭ Horizontal 16:9<br><small>YouTube / apresentações</small></button>
+      </div>
+      <div class="tip" style="margin-top:6px">Para horizontal, gire o iPhone de lado antes de gravar — a imagem enquadrada aparece na tela exatamente como vai sair no vídeo.</div>
+    </div>
+    <div class="row">
+      <label>Altura da faixa de texto (modo câmera) <b id="vArea">40%</b></label>
+      <input type="range" id="area" min="20" max="80" step="1" value="40">
+    </div>
+    <div class="row">
+      <label>Contagem regressiva</label>
+      <div class="seg" id="countSeg">
+        <button class="chip" data-v="0">Nenhuma</button>
+        <button class="chip on" data-v="3">3 s</button>
+        <button class="chip" data-v="5">5 s</button>
+      </div>
+    </div>
+    <div class="row">
+      <label>Opções</label>
+      <div class="toggles">
+        <button class="chip" id="tMirror">Espelhar texto</button>
+        <button class="chip on" id="tCenter">Centralizar</button>
+        <button class="chip on" id="tDir">Mostrar [direções]</button>
+        <button class="chip on" id="tAuto">Parar gravação no fim do texto</button>
+      </div>
+    </div>
+  </div>
+
+  <button class="start" id="startBtn">▶ Começar</button>
+
+  <div class="tip">
+    <b>Dicas:</b><br>
+    • Toque na tela para pausar/continuar. Com pausa, arraste para voltar ou avançar.<br>
+    • Texto entre colchetes, como <code>[sorrir, mais perto da câmera]</code>, aparece em dourado e menor — serve para marcar a direção de atuação sem confundir com a fala.<br>
+    • Uma linha em branco cria uma pausa visual entre os blocos.<br>
+    • A resolução padrão é 1080p a 30 fps. Você pode trocar para 720p ou 4K e para 60 fps. A resolução real que a câmera entregou aparece no canto da tela durante a gravação.<br>
+    • Se a gravação for interrompida (ligação, app fechado), ao abrir de novo aparece a opção “Recuperar vídeo”.<br>
+    • Modo câmera: o vídeo gravado sai na orientação correta (a prévia aparece espelhada como selfie, igual à câmera do iPhone).<br>
+    • Ao gravar, o texto rola junto. Ao parar, toque em “Salvar no iPhone” › “Salvar Vídeo” para ir para a Galeria.<br>
+    • “Espelhar” é só para quem usa suporte com vidro (beam splitter) na frente da câmera.<br>
+    • Para não apagar a tela: Ajustes › Tela e Brilho › Bloqueio Automático › Nunca (durante a gravação).<br>
+    • No Safari, toque em Compartilhar › “Adicionar à Tela de Início” para abrir como app.
+  </div>
+</section>
+
+<!-- ======== PROMPTER ======== -->
+<section id="play" class="hidden">
+  <video id="cam" playsinline muted autoplay></video>
+  <canvas id="preview"></canvas>
+  <div id="stage">
+    <div id="scroller"><div id="text"></div></div>
+  </div>
+  <div id="fadeTop"></div><div id="fadeBot"></div>
+  <div id="guide"></div>
+  <div id="progress"></div>
+  <div id="pausedTag" class="hidden">PAUSADO</div>
+  <div id="fmtTag" class="hidden"></div>
+  <div id="rotTag" class="hidden"></div>
+  <div id="recTag" class="hidden">● REC <span id="recTime">0:00</span></div>
+  <div id="camErr" class="hidden"></div>
+  <div id="count" class="hidden"></div>
+  <div id="bar">
+    <button id="bBack" title="Voltar">✕</button>
+    <button id="bRestart" title="Do início">⟲</button>
+    <button id="bSlow">−</button>
+    <div class="lbl">ppm<br><b id="lSpeed">140</b></div>
+    <button id="bFast">+</button>
+    <button id="bPlay" class="big">❚❚</button>
+    <button id="recBtn" title="Gravar"></button>
+    <button id="bSmall">A−</button>
+    <button id="bBigger">A+</button>
+  </div>
+</section>
+
+<section id="review" class="hidden">
+  <video id="playback" playsinline controls></video>
+  <div id="saveMsg"></div>
+  <div class="acts">
+    <button class="pri" id="rSave">Salvar no iPhone</button>
+    <button id="rAgain">Gravar de novo</button>
+    <button id="rEdit">Editar texto</button>
+  </div>
+</section>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const store = {
+    get(k,d){ try{ const v = localStorage.getItem('tp_'+k); return v===null? d : JSON.parse(v);}catch(e){return d;} },
+    set(k,v){ try{ localStorage.setItem('tp_'+k, JSON.stringify(v)); }catch(e){} }
+  };
+
+  const S = {
+    text: store.get('text',''),
+    speed: (function(v){ return (v>=80 && v<=220) ? v : 140; })(store.get('wpm',140)),
+    size: store.get('size',44),
+    margin: store.get('margin',8),
+    guide: store.get('guide',25),
+    count: store.get('count',3),
+    mirror: store.get('mirror',false),
+    center: store.get('center',true),
+    dir: store.get('dir',true),
+    cam: store.get('cam',true),
+    front: store.get('front',true),
+    area: store.get('area',40),
+    autostop: store.get('autostop',true),
+    fmt: store.get('fmt','v'),
+    res: store.get('res','1080'),
+    fps: store.get('fps',30)
+  };
+  const save = () => { Object.keys(S).forEach(k=>store.set(k,S[k])); store.set('wpm',S.speed); };
+
+  // ---------- edição ----------
+  const ta = $('script');
+  ta.value = S.text;
+  function fmtDur(sec){ return sec>=60? Math.floor(sec/60)+' min '+(sec%60)+' s' : sec+' s'; }
+  function spokenWords(t){ return ((t||'').replace(/\[[^\]]*\]/g,' ').trim().match(/\S+/g)||[]).length; }
+  function updateMeta(){
+    const spoken = ta.value.replace(/\[[^\]]*\]/g,' ');
+    const w = (spoken.trim().match(/\S+/g)||[]).length;
+    $('words').textContent = w + (w===1?' palavra':' palavras');
+    const sec = Math.round(w/S.speed*60);
+    $('eta').textContent = '⏱ ' + fmtDur(sec) + ' de vídeo a '+S.speed+' ppm';
+  }
+  ta.addEventListener('input',()=>{S.text=ta.value;store.set('text',S.text);updateMeta();});
+  updateMeta();
+
+  function bindRange(id,key,lbl,suffix){
+    const el=$(id); el.value=S[key]; $(lbl).textContent=S[key]+(suffix||'');
+    el.addEventListener('input',()=>{S[key]=+el.value;$(lbl).textContent=S[key]+(suffix||'');save();});
+  }
+  bindRange('speed','speed','vSpeed',' ppm');
+  $('speed').addEventListener('input',updateMeta);
+  bindRange('size','size','vSize');
+  bindRange('margin','margin','vMargin','%');
+  bindRange('guidePos','guide','vGuide','%');
+  bindRange('area','area','vArea','%');
+
+  document.querySelectorAll('#countSeg .chip').forEach(b=>{
+    b.classList.toggle('on', +b.dataset.v===S.count);
+    b.addEventListener('click',()=>{
+      S.count=+b.dataset.v; save();
+      document.querySelectorAll('#countSeg .chip').forEach(x=>x.classList.toggle('on',x===b));
+    });
+  });
+  function bindSeg(id,key,num){
+    document.querySelectorAll('#'+id+' .chip').forEach(b=>{
+      const v = num ? +b.dataset.v : b.dataset.v;
+      b.classList.toggle('on', v===S[key]);
+      b.addEventListener('click',()=>{
+        S[key]=v; save();
+        document.querySelectorAll('#'+id+' .chip').forEach(x=>x.classList.toggle('on',x===b));
+      });
+    });
+  }
+  bindSeg('resSeg','res',false); bindSeg('fpsSeg','fps',true);
+  document.querySelectorAll('#fmtSeg .chip').forEach(b=>{
+    b.classList.toggle('on', b.dataset.v===S.fmt);
+    b.addEventListener('click',()=>{
+      S.fmt=b.dataset.v; save();
+      document.querySelectorAll('#fmtSeg .chip').forEach(x=>x.classList.toggle('on',x===b));
+    });
+  });
+  function bindToggle(id,key){
+    const b=$(id); b.classList.toggle('on',S[key]);
+    b.addEventListener('click',()=>{S[key]=!S[key];b.classList.toggle('on',S[key]);save();});
+  }
+  bindToggle('tMirror','mirror'); bindToggle('tCenter','center'); bindToggle('tDir','dir');
+  bindToggle('tAuto','autostop');
+  bindToggle('tCam','cam'); bindToggle('tFront','front');
+
+  // ---------- prompter ----------
+  let autoStopTimer=null;
+  let y=0, playing=false, last=0, raf=0, maxY=0, countTimer=null, hideTimer=null, wakeLock=null;
+  const scroller=$('scroller'), textEl=$('text'), bar=$('bar');
+
+  function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+  function render(){
+    let html = esc(S.text || 'Cole um texto na tela anterior.');
+    html = html.replace(/\[([^\]]*)\]/g, (m,inner)=> S.dir ? '<span class="dir">['+inner+']</span>' : '');
+    textEl.innerHTML = html;
+    textEl.style.fontSize = S.size+'px';
+    textEl.style.textAlign = S.center?'center':'left';
+    textEl.style.paddingLeft = textEl.style.paddingRight = S.margin+'vw';
+    const camMode = $('play').classList.contains('camera');
+    const boxH = camMode ? window.innerHeight*S.area/100 : window.innerHeight;
+    $('play').style.setProperty('--area', S.area+'vh');
+    const gPx = boxH*S.guide/100;
+    textEl.style.paddingTop = gPx+'px';
+    textEl.style.paddingBottom = boxH+'px';
+    $('guide').style.top = gPx+'px';
+    window.__boxH = boxH;
+    $('lSpeed').textContent = S.speed;
+    words = Math.max(1, spokenWords(S.text));
+    requestAnimationFrame(()=>{
+      const cs=getComputedStyle(textEl);
+      endY = Math.max(1, textEl.offsetHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom));
+      maxY = Math.max(0, textEl.offsetHeight - window.__boxH, endY);
+      apply();
+    });
+  }
+  function apply(){
+    y = Math.max(0, Math.min(y, maxY));
+    const m = S.mirror ? ' scaleX(-1)' : '';
+    scroller.style.transform = 'translateY('+(-y)+'px)'+m;
+    $('progress').style.width = Math.min(100, endY? (y/endY*100):0)+'%';
+  }
+  // endY = ponto em que a última linha passa pela linha de leitura
+  let endY=0, words=1;
+  function pxPerSec(){ const dur = Math.max(1, words / S.speed * 60); return endY / dur; }
+  function loop(t){
+    if(!playing) return;
+    const dt = last? (t-last)/1000 : 0; last=t;
+    y += pxPerSec()*dt;
+    apply();
+    if(y>=endY){
+      setPlaying(false);
+      if(S.autostop && rec && rec.state==='recording'){
+        $('pausedTag').textContent='FIM · parando em 2 s'; $('pausedTag').classList.remove('hidden');
+        autoStopTimer=setTimeout(()=>{ if(rec && rec.state==='recording') stopRec(); },2000);
+      }
+      return;
+    }
+    raf=requestAnimationFrame(loop);
+  }
+  function setPlaying(p){
+    playing=p; $('bPlay').textContent = p?'❚❚':'▶';
+    if(p){ clearTimeout(autoStopTimer); $('pausedTag').textContent='PAUSADO'; }
+    $('pausedTag').classList.toggle('hidden', p);
+    cancelAnimationFrame(raf);
+    if(p){ last=0; raf=requestAnimationFrame(loop); scheduleHide(); }
+    else { showBar(); }
+  }
+  function showBar(){ bar.classList.remove('faded'); clearTimeout(hideTimer); }
+  function scheduleHide(){ clearTimeout(hideTimer); hideTimer=setTimeout(()=>{ if(playing && !$('play').classList.contains('camera')) bar.classList.add('faded'); },2500); }
+
+  function countdown(then){
+    clearInterval(countTimer);
+    if(!S.count){ then(); return; }
+    let n=S.count; const c=$('count'); c.textContent=n; c.classList.remove('hidden');
+    countTimer=setInterval(()=>{ n--; if(n<=0){clearInterval(countTimer);c.classList.add('hidden');then();} else c.textContent=n; },1000);
+  }
+  async function keepAwake(){
+    try{ if('wakeLock' in navigator){ wakeLock = await navigator.wakeLock.request('screen'); } }catch(e){}
+  }
+
+  // ---------- cópia de segurança da gravação (fica no próprio iPhone) ----------
+  const DB = {
+    db:null,
+    open(){ return new Promise(res=>{
+      if(this.db) return res(this.db);
+      try{
+        const r=indexedDB.open('teleprompter-rec',1);
+        r.onupgradeneeded=()=>{ const d=r.result; d.createObjectStore('chunks',{autoIncrement:true}); d.createObjectStore('meta'); };
+        r.onsuccess=()=>{ this.db=r.result; res(this.db); };
+        r.onerror=()=>res(null);
+      }catch(e){ res(null); }
+    }); },
+    async tx(store,mode,fn){ const d=await this.open(); if(!d) return null;
+      return new Promise(res=>{ try{ const t=d.transaction(store,mode); const out=fn(t.objectStore(store)); t.oncomplete=()=>res(out&&out.result!==undefined?out.result:out); t.onerror=()=>res(null); }catch(e){ res(null); } }); },
+    clear(){ return Promise.all([this.tx('chunks','readwrite',s=>s.clear()), this.tx('meta','readwrite',s=>s.clear())]); },
+    addChunk(b){ return this.tx('chunks','readwrite',s=>s.add(b)); },
+    setMeta(m){ return this.tx('meta','readwrite',s=>s.put(m,'session')); },
+    getMeta(){ return this.tx('meta','readonly',s=>s.get('session')); },
+    allChunks(){ return this.tx('chunks','readonly',s=>s.getAll()); }
+  };
+  async function checkRecovery(){
+    const m = await DB.getMeta();
+    if(!m || m.done) return;
+    const ch = await DB.allChunks();
+    if(!ch || !ch.length){ DB.clear(); return; }
+    const box=$('recoverBox'); box.classList.remove('hidden');
+    $('recoverInfo').textContent = 'Uma gravação de '+new Date(m.started).toLocaleString('pt-BR')+' foi interrompida antes de ser salva.';
+    $('recoverYes').onclick=()=>{
+      chunks=ch.map(c=>new Blob([c.buf],{type:c.type||''})); lastExt=m.ext||'mp4'; box.classList.add('hidden');
+      $('edit').classList.add('hidden'); showReview(true);
+    };
+    $('recoverNo').onclick=()=>{ DB.clear(); box.classList.add('hidden'); };
+  }
+
+  // ---------- câmera ----------
+  let stream=null, rec=null, chunks=[], recStart=0, recTick=null, lastBlob=null, lastUrl=null, lastExt='mp4';
+  const cam=$('cam');
+  async function openCam(){
+    stopCam();
+    $('camErr').classList.add('hidden');
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      camFail('Este navegador não liberou a câmera. Abra o link direto no Safari (endereço https), não dentro de outro app.'); return false;
+    }
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({
+        video:videoConstraints(),
+        audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:false, sampleRate:{ideal:48000}, channelCount:{ideal:2}}
+      });
+      cam.srcObject=stream;
+      try{ await cam.play(); }catch(e){}
+      await new Promise(r=>{ if(cam.videoWidth) r(); else { cam.onloadedmetadata=()=>r(); setTimeout(r,2000); } });
+      setupCanvas();
+      return true;
+    }catch(e){
+      camFail('Não consegui acessar a câmera/microfone ('+(e.name||'erro')+'). No iPhone: Ajustes › Safari › Câmera e Microfone › Permitir, e recarregue a página.');
+      return false;
+    }
+  }
+  // O vídeo é desenhado num quadro de tamanho fixo (1080x1920 ou 1920x1080),
+  // então o arquivo final sai sempre no formato escolhido, girando ou não o iPhone.
+  const cv=$('preview'); const ctx=cv.getContext('2d',{alpha:false}); let drawing=false;
+  cam.addEventListener('resize',()=>{ if(stream) setupCanvas(); });
+  function fitSize(){
+    // maior recorte 9:16 ou 16:9 que cabe na imagem real da câmera, sem ampliar
+    const vw=cam.videoWidth||1080, vh=cam.videoHeight||1920;
+    const target = S.fmt==='h' ? 16/9 : 9/16;
+    let w,h;
+    if(vw/vh > target){ h=vh; w=vh*target; } else { w=vw; h=vw/target; }
+    return [Math.round(w/2)*2, Math.round(h/2)*2];
+  }
+  function camInfo(){
+    const vt=stream && stream.getVideoTracks()[0]; let fps=S.fps;
+    try{ fps=Math.round(vt.getSettings().frameRate)||S.fps; }catch(e){}
+    return fps;
+  }
+  function setupCanvas(){
+    if(rec && rec.state==='recording') return; // não muda o tamanho no meio da gravação
+    const [w,h]=fitSize(); cv.width=w; cv.height=h;
+    cv.classList.toggle('selfie',S.front);
+    $('fmtTag').textContent = (S.fmt==='h' ? 'Horizontal' : 'Vertical')+' · '+cv.width+'×'+cv.height+' · '+camInfo()+' fps';
+    $('fmtTag').classList.remove('hidden');
+    layoutPreview();
+    if(!drawing){ drawing=true; requestAnimationFrame(draw); }
+  }
+  function layoutPreview(){
+    const W=window.innerWidth, H=window.innerHeight, r=cv.width/cv.height;
+    let w=W, h=W/r; if(h>H){ h=H; w=H*r; }
+    Object.assign(cv.style,{width:w+'px',height:h+'px',left:((W-w)/2)+'px',top:((H-h)/2)+'px'});
+    const portrait = H>W, rot=$('rotTag');
+    if(stream && S.fmt==='h' && portrait){ rot.innerHTML='↻ Gire o iPhone para a <b>horizontal</b><br><small>para aproveitar toda a imagem</small>'; rot.classList.remove('hidden'); }
+    else if(stream && S.fmt==='v' && !portrait){ rot.innerHTML='↺ Gire o iPhone para a <b>vertical</b><br><small>para aproveitar toda a imagem</small>'; rot.classList.remove('hidden'); }
+    else rot.classList.add('hidden');
+  }
+  function draw(){
+    if(!stream){ drawing=false; return; }
+    const vw=cam.videoWidth, vh=cam.videoHeight;
+    if(vw && vh){
+      const cw=cv.width, ch=cv.height, sc=Math.max(cw/vw, ch/vh);
+      const dw=vw*sc, dh=vh*sc;
+      ctx.imageSmoothingQuality='high';
+      ctx.drawImage(cam,(cw-dw)/2,(ch-dh)/2,dw,dh);
+    }
+    requestAnimationFrame(draw);
+  }
+  function videoConstraints(){
+    const L = {'720':[1280,720],'1080':[1920,1080],'4k':[3840,2160]}[S.res] || [1920,1080];
+    return {facingMode:S.front?'user':'environment', width:{ideal:L[0]}, height:{ideal:L[1]}, frameRate:{ideal:S.fps}};
+  }
+  function camFail(msg){ const b=$('camErr'); b.textContent=msg; b.classList.remove('hidden'); }
+  function stopCam(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } cam.srcObject=null; $('rotTag').classList.add('hidden'); $('fmtTag').classList.add('hidden'); }
+  function pickMime(){
+    const opts=['video/mp4;codecs=avc1','video/mp4','video/webm;codecs=vp9,opus','video/webm'];
+    for(const m of opts){ try{ if(window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m; }catch(e){} }
+    return '';
+  }
+  function startRec(){
+    if(!stream){ camFail('Câmera desligada. Volte e ative “Gravar com a câmera”.'); return; }
+    if(!window.MediaRecorder){ camFail('Este iPhone/navegador não suporta gravação pela página. Atualize o iOS.'); return; }
+    const mime=pickMime(); lastExt = mime.includes('webm')?'webm':'mp4';
+    chunks=[];
+    let out;
+    const fps=camInfo();
+    const vw=cam.videoWidth, vh=cam.videoHeight;
+    const direct = vw===cv.width && vh===cv.height; // câmera já está no formato: grava direto, sem nenhuma etapa intermediária
+    if(direct){ out = stream; }
+    else {
+      try{
+        out = cv.captureStream(fps);
+        stream.getAudioTracks().forEach(t=>out.addTrack(t));
+      }catch(e){ out = stream; }
+    }
+    // taxa de bits proporcional à resolução e fps (ex.: 1080p30 ≈ 16 Mbps, 4K30 ≈ 50 Mbps)
+    const bps = Math.min(50e6, Math.max(6e6, Math.round(cv.width*cv.height*fps*0.25)));
+    const opts = mime ? {mimeType:mime, videoBitsPerSecond:bps, audioBitsPerSecond:256000} : {videoBitsPerSecond:bps};
+    try{ rec = new MediaRecorder(out, opts); }
+    catch(e){ try{ rec = new MediaRecorder(out, mime?{mimeType:mime}:undefined); }catch(e2){ rec = new MediaRecorder(out); } }
+    $('fmtTag').textContent += ' · '+Math.round(bps/1e6)+' Mbps';
+    rec.ondataavailable=e=>{ if(e.data && e.data.size){ chunks.push(e.data);
+      const t=e.data.type; e.data.arrayBuffer().then(buf=>DB.addChunk({buf, type:t})).catch(()=>{}); } };
+    DB.clear().then(()=>DB.setMeta({started:Date.now(), ext:lastExt, done:false}));
+    rec.onstop=showReview;
+    y=0; apply();
+    countdown(()=>{
+      rec.start(1000); recStart=Date.now();
+      $('recBtn').classList.add('rec'); $('recTag').classList.remove('hidden');
+      recTick=setInterval(()=>{ const s=Math.floor((Date.now()-recStart)/1000); $('recTime').textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); },500);
+      setPlaying(true);
+    });
+  }
+  function stopRec(){
+    clearTimeout(autoStopTimer); $('pausedTag').textContent='PAUSADO';
+    if(rec && rec.state!=='inactive'){ rec.stop(); }
+    clearInterval(recTick); $('recBtn').classList.remove('rec'); $('recTag').classList.add('hidden');
+    setPlaying(false);
+  }
+  function showReview(recovered){
+    lastBlob = new Blob(chunks,{type: (chunks[0] && chunks[0].type) || (lastExt==='webm'?'video/webm':'video/mp4')});
+    if(lastUrl) URL.revokeObjectURL(lastUrl);
+    lastUrl = URL.createObjectURL(lastBlob);
+    $('playback').src=lastUrl;
+    $('saveMsg').textContent = recovered===true ? 'Gravação recuperada. Salve na Galeria para não perder.' : '';
+    $('play').classList.add('hidden'); $('review').classList.remove('hidden');
+    stopCam();
+  }
+  $('recBtn').onclick = ()=>{ (rec && rec.state==='recording') ? stopRec() : startRec(); };
+  $('rSave').onclick = async ()=>{
+    const name='video-'+new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')+'.'+lastExt;
+    const file=new File([lastBlob],name,{type:lastBlob.type||'video/mp4'});
+    try{
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        await navigator.share({files:[file]});
+        DB.clear();
+        $('saveMsg').textContent='Na janela que abriu, escolha “Salvar Vídeo” para ir à Galeria.';
+        return;
+      }
+    }catch(e){ if(e.name==='AbortError') return; }
+    DB.clear();
+    const a=document.createElement('a'); a.href=lastUrl; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+    $('saveMsg').textContent='Arquivo baixado. No iPhone ele fica em Arquivos › Downloads (dali: Compartilhar › Salvar Vídeo).';
+  };
+  $('rAgain').onclick = ()=>{ $('review').classList.add('hidden'); enterPlay(); };
+  $('rEdit').onclick = ()=>{ $('review').classList.add('hidden'); $('edit').classList.remove('hidden'); };
+
+  // ---------- permissão ----------
+  async function checkPerm(){
+    try{
+      if(navigator.permissions && navigator.permissions.query){
+        const st = await navigator.permissions.query({name:'camera'});
+        setPermUI(st.state);
+        st.onchange=()=>setPermUI(st.state);
+      }
+    }catch(e){}
+    if(!window.isSecureContext){
+      $('permState').textContent='precisa de link https';
+      $('permHelp').innerHTML='O iPhone só libera câmera em páginas abertas por um endereço <b>https</b> no Safari. Abra pelo link publicado (não pelo arquivo).';
+    }
+  }
+  function setPermUI(state){
+    const map={granted:'✅ liberada',denied:'❌ bloqueada',prompt:'aguardando'};
+    $('permState').textContent = map[state] || state;
+    if(state==='granted'){ $('permBtn').textContent='✅ Câmera e microfone liberados'; }
+    if(state==='denied'){
+      $('permHelp').innerHTML='O Safari bloqueou. No iPhone: toque em <b>“aA”</b> na barra de endereço › <b>Ajustes do Site</b> › Câmera e Microfone › <b>Permitir</b>. Ou em Ajustes › Apps › Safari › Câmera / Microfone › Permitir. Depois recarregue a página.';
+    }
+  }
+  async function showCaps(st){
+    try{
+      const vt=st.getVideoTracks()[0];
+      const set=vt.getSettings(); const caps=vt.getCapabilities?vt.getCapabilities():null;
+      let txt='Agora: '+set.width+'×'+set.height+' a '+Math.round(set.frameRate||0)+' fps.';
+      if(caps && caps.width) txt+=' Sua câmera '+(S.front?'frontal':'traseira')+' aceita até '+caps.width.max+'×'+caps.height.max+(caps.frameRate?' e até '+Math.round(caps.frameRate.max)+' fps':'')+'.';
+      $('capInfo').textContent=txt;
+    }catch(e){}
+  }
+  $('permBtn').onclick = async ()=>{
+    try{
+      const st = await navigator.mediaDevices.getUserMedia({video:videoConstraints(), audio:true});
+      await showCaps(st);
+      st.getTracks().forEach(t=>t.stop());
+      setPermUI('granted');
+    }catch(e){
+      setPermUI(e.name==='NotAllowedError'?'denied':'erro');
+      if(e.name!=='NotAllowedError') $('permHelp').textContent='Não foi possível abrir a câmera ('+(e.name||'erro')+'). Confira se o link é https e se está no Safari.';
+    }
+  };
+  checkPerm();
+  checkRecovery();
+  if('serviceWorker' in navigator && location.protocol==='https:'){
+    navigator.serviceWorker.register('sw.js').catch(()=>{});
+  }
+
+  async function enterPlay(){
+    S.text=ta.value; save();
+    $('edit').classList.add('hidden'); $('play').classList.remove('hidden');
+    $('play').classList.toggle('camera', S.cam);
+    $('recBtn').classList.toggle('hidden', !S.cam);
+    y=0; render(); setPlaying(false); $('pausedTag').classList.add('hidden');
+    keepAwake();
+    if(S.cam){
+      cv.classList.remove('hidden');
+      await openCam();
+      $('pausedTag').classList.add('hidden');
+      // no modo câmera, o texto só começa quando você toca em gravar (ou no ▶ para ensaiar)
+    } else {
+      cv.classList.add('hidden'); stopCam();
+      countdown(()=>setPlaying(true));
+    }
+  }
+  $('startBtn').addEventListener('click', enterPlay);
+  function exitPlay(){
+    if(rec && rec.state==='recording'){ rec.onstop=null; rec.stop(); clearInterval(recTick); $('recBtn').classList.remove('rec'); $('recTag').classList.add('hidden'); }
+    stopCam();
+    setPlaying(false); clearInterval(countTimer); $('count').classList.add('hidden');
+    $('play').classList.add('hidden'); $('edit').classList.remove('hidden');
+    $('speed').value=S.speed; $('vSpeed').textContent=S.speed+' ppm'; updateMeta();
+    $('size').value=S.size; $('vSize').textContent=S.size;
+    $('tMirror').classList.toggle('on',S.mirror);
+    try{ wakeLock && wakeLock.release(); }catch(e){}
+    try{ document.fullscreenElement && document.exitFullscreen(); }catch(e){}
+  }
+
+  const stop = e => e.stopPropagation();
+  bar.addEventListener('pointerdown', stop);
+  $('bBack').onclick = exitPlay;
+  $('bRestart').onclick = ()=>{ setPlaying(false); y=0; apply(); countdown(()=>setPlaying(true)); };
+  $('bPlay').onclick = ()=> setPlaying(!playing);
+  $('bSlow').onclick = ()=>{ S.speed=Math.max(80,S.speed-10); $('lSpeed').textContent=S.speed; save(); scheduleIfPlaying(); };
+  $('bFast').onclick = ()=>{ S.speed=Math.min(220,S.speed+10); $('lSpeed').textContent=S.speed; save(); scheduleIfPlaying(); };
+  $('bSmall').onclick = ()=>{ resize(-4); };
+  $('bBigger').onclick = ()=>{ resize(4); };
+  
+  function scheduleIfPlaying(){ if(playing) scheduleHide(); }
+  function resize(d){
+    const ratio = maxY? y/maxY : 0;
+    S.size=Math.max(24,Math.min(96,S.size+d)); save(); render();
+    requestAnimationFrame(()=>{ y = ratio*maxY; apply(); });
+  }
+
+  // toque = pausa/continua; arrastar = rolar manualmente
+  let startY=null, startScroll=0, moved=false;
+  const stage=$('play');
+  stage.addEventListener('pointerdown',e=>{
+    if(!$('count').classList.contains('hidden')) return;
+    startY=e.clientY; startScroll=y; moved=false;
+  });
+  stage.addEventListener('pointermove',e=>{
+    if(startY===null) return;
+    const dy=e.clientY-startY;
+    if(Math.abs(dy)>8){ moved=true; if(playing) setPlaying(false); y=startScroll-dy; apply(); }
+  });
+  stage.addEventListener('pointerup',()=>{
+    if(startY===null) return;
+    if(!moved){ if(bar.classList.contains('faded')){ showBar(); } setPlaying(!playing); }
+    startY=null;
+  });
+  stage.addEventListener('pointercancel',()=>{startY=null;});
+
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden && rec && rec.state==='recording'){
+      try{ rec.requestData(); }catch(e){}
+      stopRec();
+    }
+  });
+  function onRotate(){ if(!$('play').classList.contains('hidden')){ render(); if(stream) layoutPreview(); } }
+  window.addEventListener('resize', onRotate);
+  window.addEventListener('orientationchange', ()=>setTimeout(onRotate,300));
+  document.addEventListener('keydown',e=>{
+    if($('play').classList.contains('hidden')) return;
+    if(e.code==='Space'){ e.preventDefault(); setPlaying(!playing); }
+    if(e.key==='ArrowUp'){ y-=60; apply(); }
+    if(e.key==='ArrowDown'){ y+=60; apply(); }
+    if(e.key==='Escape') exitPlay();
+  });
+})();
+</script>
+</body>
+</html>
