@@ -146,6 +146,11 @@
       </div>
     </div>
     <div class="row">
+      <label>Volume do microfone <b id="vGain">+18 dB</b></label>
+      <input type="range" id="gain" min="0" max="30" step="1" value="18">
+      <div class="tip" style="margin-top:6px">Aumenta o volume da voz na gravação, com proteção contra estouro. Se a voz sair baixa, suba; se sair chiando ou com muito ruído de fundo, desça.</div>
+    </div>
+    <div class="row">
       <label>Formato do vídeo</label>
       <div class="seg" id="fmtSeg">
         <button class="chip" data-v="v">▯ Vertical 9:16<br><small>Reels / Stories / TikTok</small></button>
@@ -229,6 +234,7 @@
     <button class="pri" id="rSave">Salvar no iPhone</button>
     <button id="rAgain">Gravar de novo</button>
     <button id="rEdit">Editar texto</button>
+    <button id="rDiscard" style="color:#ff8a80">Descartar e sair</button>
   </div>
 </section>
 
@@ -256,6 +262,7 @@
     autostop: store.get('autostop',true),
     fmt: store.get('fmt','v'),
     res: store.get('res','1080'),
+    gain: store.get('gain',18),
     fps: store.get('fps',30)
   };
   const save = () => { Object.keys(S).forEach(k=>store.set(k,S[k])); store.set('wpm',S.speed); };
@@ -285,6 +292,8 @@
   bindRange('margin','margin','vMargin','%');
   bindRange('guidePos','guide','vGuide','%');
   bindRange('area','area','vArea','%');
+  (function(){ const el=$('gain'); el.value=S.gain; const f=()=>$('vGain').textContent='+'+S.gain+' dB';
+    f(); el.addEventListener('input',()=>{ S.gain=+el.value; f(); save(); }); })();
 
   document.querySelectorAll('#countSeg .chip').forEach(b=>{
     b.classList.toggle('on', +b.dataset.v===S.count);
@@ -500,10 +509,29 @@
   }
   function videoConstraints(){
     const L = {'720':[1280,720],'1080':[1920,1080],'4k':[3840,2160]}[S.res] || [1920,1080];
-    return {facingMode:S.front?'user':'environment', width:{ideal:L[0]}, height:{ideal:L[1]}, frameRate:{ideal:S.fps}};
+    return {facingMode:S.front?'user':'environment', width:{ideal:L[0]}, height:{ideal:L[1]}, frameRate:{ideal:S.fps, max:S.fps}};
   }
   function camFail(msg){ const b=$('camErr'); b.textContent=msg; b.classList.remove('hidden'); }
   function stopCam(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } cam.srcObject=null; $('rotTag').classList.add('hidden'); $('fmtTag').classList.add('hidden'); }
+  // Voz: ganho ajustável + compressor suave + limitador (não deixa estourar)
+  let actx=null;
+  function processedAudioTrack(){
+    try{
+      const at = stream.getAudioTracks()[0]; if(!at) return null;
+      const AC = window.AudioContext || window.webkitAudioContext; if(!AC) return at;
+      if(!actx) actx = new AC({sampleRate:48000});
+      if(actx.state==='suspended') actx.resume();
+      const src = actx.createMediaStreamSource(new MediaStream([at]));
+      const comp = actx.createDynamicsCompressor();
+      comp.threshold.value=-30; comp.knee.value=12; comp.ratio.value=3; comp.attack.value=0.005; comp.release.value=0.25;
+      const g = actx.createGain(); g.gain.value = Math.pow(10, S.gain/20);
+      const lim = actx.createDynamicsCompressor();
+      lim.threshold.value=-2; lim.knee.value=0; lim.ratio.value=20; lim.attack.value=0.001; lim.release.value=0.1;
+      const dst = actx.createMediaStreamDestination();
+      src.connect(comp); comp.connect(g); g.connect(lim); lim.connect(dst);
+      return dst.stream.getAudioTracks()[0] || at;
+    }catch(e){ return stream.getAudioTracks()[0] || null; }
+  }
   function pickMime(){
     const opts=['video/mp4;codecs=avc1','video/mp4','video/webm;codecs=vp9,opus','video/webm'];
     for(const m of opts){ try{ if(window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m; }catch(e){} }
@@ -518,11 +546,13 @@
     const fps=camInfo();
     const vw=cam.videoWidth, vh=cam.videoHeight;
     const direct = vw===cv.width && vh===cv.height; // câmera já está no formato: grava direto, sem nenhuma etapa intermediária
-    if(direct){ out = stream; }
-    else {
+    const aTrack = processedAudioTrack();
+    if(direct){
+      out = new MediaStream([stream.getVideoTracks()[0]].concat(aTrack?[aTrack]:[]));
+    } else {
       try{
         out = cv.captureStream(fps);
-        stream.getAudioTracks().forEach(t=>out.addTrack(t));
+        if(aTrack) out.addTrack(aTrack);
       }catch(e){ out = stream; }
     }
     // taxa de bits proporcional à resolução e fps (ex.: 1080p30 ≈ 16 Mbps, 4K30 ≈ 50 Mbps)
@@ -574,7 +604,21 @@
     const a=document.createElement('a'); a.href=lastUrl; a.download=name; document.body.appendChild(a); a.click(); a.remove();
     $('saveMsg').textContent='Arquivo baixado. No iPhone ele fica em Arquivos › Downloads (dali: Compartilhar › Salvar Vídeo).';
   };
-  $('rAgain').onclick = ()=>{ $('review').classList.add('hidden'); enterPlay(); };
+  $('rAgain').onclick = ()=>{ $('playback').pause(); $('review').classList.add('hidden'); enterPlay(); };
+  let discardArm=null;
+  $('rDiscard').onclick = ()=>{
+    const b=$('rDiscard');
+    if(!discardArm){
+      b.textContent='Toque de novo para apagar'; b.style.background='#5a1d1a';
+      discardArm=setTimeout(()=>{ discardArm=null; b.textContent='Descartar e sair'; b.style.background=''; },3000);
+      return;
+    }
+    clearTimeout(discardArm); discardArm=null; b.textContent='Descartar e sair'; b.style.background='';
+    DB.clear(); chunks=[]; lastBlob=null;
+    const v=$('playback'); v.pause(); v.removeAttribute('src'); v.load();
+    if(lastUrl){ URL.revokeObjectURL(lastUrl); lastUrl=null; }
+    $('review').classList.add('hidden'); $('edit').classList.remove('hidden');
+  };
   $('rEdit').onclick = ()=>{ $('review').classList.add('hidden'); $('edit').classList.remove('hidden'); };
 
   // ---------- permissão ----------
