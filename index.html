@@ -103,6 +103,14 @@
   .brow button{border:0;border-radius:8px;background:#26262d;padding:6px 10px;font-size:13px;white-space:nowrap}
   #blockNav{position:absolute;top:calc(14px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;background:rgba(0,0,0,.65);border:1px solid var(--acc);border-radius:999px;padding:3px 6px;font-size:13px;font-weight:700;color:var(--acc)}
   #blockNav button{background:transparent;border:0;color:#fff;font-size:18px;width:30px;height:28px;padding:0}
+  #nextPanel{position:fixed;inset:0;background:rgba(0,0,0,.92);display:flex;flex-direction:column;gap:10px;padding:calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));z-index:5}
+  #nextPanel.hidden{display:none!important}
+  #npTitle{font-size:17px;font-weight:700;color:var(--acc)}
+  #npText{flex:1;height:auto;min-height:160px;max-width:900px;width:100%;margin:0 auto}
+  .np-acts{display:flex;gap:8px;max-width:900px;width:100%;margin:0 auto}
+  .np-acts button{flex:1;border:0;border-radius:12px;padding:14px;font-size:16px;background:#222228}
+  .np-acts .pri{background:var(--acc);color:#111;font-weight:700}
+  .brow.add{justify-content:center;cursor:pointer;color:var(--acc);font-weight:600;border-style:dashed}
   #play.blocks #pausedTag{top:calc(54px + env(safe-area-inset-top))}
 </style>
 </head>
@@ -118,8 +126,14 @@
     <div class="tip" id="recoverInfo" style="margin:0 0 10px"></div>
     <div class="seg"><button class="chip on" id="recoverYes">Recuperar vídeo</button><button class="chip" id="recoverNo">Descartar</button></div>
   </div>
+  <div id="blockTabs" class="toggles hidden" style="margin-bottom:10px"></div>
   <textarea id="script" placeholder="Cole aqui o texto do vídeo..."></textarea>
   <div class="meta"><span id="words">0 palavras</span><span id="eta">~0 s de leitura</span></div>
+  <div id="blockTools" class="toggles hidden" style="margin:-6px 0 14px">
+    <button class="chip" id="bSplit">✂ Dividir nas linhas em branco</button>
+    <button class="chip" id="bDel">🗑 Apagar este bloco</button>
+    <button class="chip" id="bClear">Limpar todos os blocos</button>
+  </div>
 
   <div class="grid">
     <div class="row">
@@ -220,7 +234,7 @@
         <button class="chip" id="tBlocks">Gravar em blocos</button>
       </div>
       <div class="tip" style="margin-top:8px">
-        <b>Gravar em blocos:</b> o texto é dividido nas <b>linhas em branco</b>. Você grava um bloco de cada vez, assiste, regrava se quiser e passa para o próximo. Cada bloco vira um vídeo separado (bloco-01, bloco-02…), pronto para juntar no editor.
+        <b>Gravar em blocos:</b> cada bloco tem o seu próprio texto, que fica guardado no app. Cole o texto do bloco, grave, e na hora do próximo cole o texto seguinte. Para regravar, o texto daquele bloco já está lá. Cada bloco vira um vídeo separado (bloco-01, bloco-02…), pronto para juntar no editor.
       </div>
     </div>
   </div>
@@ -286,6 +300,11 @@
   <div id="revTitle"></div>
   <div id="saveMsg"></div>
   <div id="blockList" class="hidden"></div>
+  <div id="nextPanel" class="hidden">
+    <div id="npTitle">Texto do bloco 2</div>
+    <textarea id="npText" placeholder="Cole aqui o texto deste bloco..."></textarea>
+    <div class="np-acts"><button class="pri" id="npGo">● Gravar este bloco</button><button id="npCancel">Cancelar</button></div>
+  </div>
   <div class="acts">
     <button class="pri hidden" id="rNext">Próximo bloco ›</button>
     <button class="pri" id="rSave">Salvar no iPhone</button>
@@ -329,10 +348,15 @@
     fps: store.get('fps',30),
     camId: store.get('camId',''),
     micId: store.get('micId',''),
-    blocks: store.get('blocks',false)
+    blocks: store.get('blocks',false),
+    btexts: (function(v){ return Array.isArray(v) ? v.map(x=>String(x||'')) : []; })(store.get('btexts',[])),
+    bcur: store.get('bcur',0)
   };
   // ---------- blocos ----------
-  let blocks=[], cur=0, view=-1, takes=[], sessionStamp='';
+  // cada bloco tem o próprio texto (S.btexts), guardado no app; as gravações (takes) ficam na memória
+  const blocks = S.btexts;
+  let cur = Math.max(0, Math.min(S.bcur|0, Math.max(0, blocks.length-1))), view=-1, takes=[], sessionStamp='';
+  function saveBlocks(){ S.bcur=cur; store.set('btexts',S.btexts); store.set('bcur',cur); }
   const stamp = () => new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
   function splitBlocks(t){ return (t||'').split(/\n[ \t]*\n/).map(s=>s.trim()).filter(Boolean); }
   const pad2 = n => String(n).padStart(2,'0');
@@ -349,12 +373,67 @@
   function updateMeta(){
     const spoken = ta.value.replace(/\[[^\]]*\]/g,' ');
     const w = (spoken.trim().match(/\S+/g)||[]).length;
-    $('words').textContent = w + (w===1?' palavra':' palavras');
+    $('words').textContent = (S.blocks ? 'Bloco '+(cur+1)+' · ' : '') + w + (w===1?' palavra':' palavras');
     const sec = Math.round(w/S.speed*60);
     $('eta').textContent = '⏱ ' + fmtDur(sec) + ' de vídeo a '+S.speed+' ppm';
   }
-  ta.addEventListener('input',()=>{S.text=ta.value;store.set('text',S.text);updateMeta();});
-  updateMeta();
+  ta.addEventListener('input',()=>{
+    if(S.blocks){ blocks[cur]=ta.value; saveBlocks(); renderTabs(); }
+    else { S.text=ta.value; store.set('text',S.text); }
+    updateMeta();
+  });
+  // ---- editor de blocos (tela inicial) ----
+  function syncEditor(){
+    if(S.blocks){
+      if(!blocks.length) blocks.push(S.text||'');   // 1ª vez: o texto atual vira o bloco 1
+      cur = Math.max(0, Math.min(cur, blocks.length-1));
+      ta.value = blocks[cur]||'';
+      ta.placeholder = 'Cole aqui o texto do bloco '+(cur+1)+'...';
+      saveBlocks();
+    } else {
+      ta.value = S.text||''; ta.placeholder = 'Cole aqui o texto do vídeo...';
+    }
+    $('blockTabs').classList.toggle('hidden', !S.blocks);
+    $('blockTools').classList.toggle('hidden', !S.blocks);
+    $('bDel').classList.toggle('hidden', blocks.length<2);
+    renderTabs(); updateMeta();
+  }
+  function takeOk(i){ return takes[i] && takes[i].src===blocks[i]; }
+  function renderTabs(){
+    if(!S.blocks) return;
+    const box=$('blockTabs'); box.innerHTML='';
+    blocks.forEach((t,i)=>{
+      const b=document.createElement('button'); b.className='chip'+(i===cur?' on':'');
+      b.textContent='Bloco '+(i+1)+(takeOk(i)?' ✓':'')+(t.trim()?'':' (vazio)');
+      b.onclick=()=>{ cur=i; syncEditor(); };
+      box.appendChild(b);
+    });
+    const add=document.createElement('button'); add.className='chip'; add.textContent='+ Novo bloco';
+    add.onclick=()=>{ blocks.push(''); cur=blocks.length-1; syncEditor(); ta.focus(); };
+    box.appendChild(add);
+  }
+  $('tBlocks').addEventListener('click',()=>setTimeout(syncEditor,0));
+  $('bSplit').onclick=()=>{
+    const parts=splitBlocks(ta.value);
+    if(parts.length<2){ $('bSplit').textContent='Não há linhas em branco para dividir'; setTimeout(()=>$('bSplit').textContent='✂ Dividir nas linhas em branco',2500); return; }
+    while(takes.length<blocks.length) takes.push(null);
+    blocks.splice(cur,1,...parts); takes.splice(cur,1,...parts.map(()=>null));
+    syncEditor();
+  };
+  function armed(btn,label,fn){ // pede um 2º clique para confirmar
+    if(btn.dataset.arm){ delete btn.dataset.arm; btn.textContent=label; fn(); return; }
+    btn.dataset.arm='1'; btn.textContent='Clique de novo para confirmar';
+    setTimeout(()=>{ if(btn.dataset.arm){ delete btn.dataset.arm; btn.textContent=label; } },3000);
+  }
+  $('bDel').onclick=()=>armed($('bDel'),'🗑 Apagar este bloco',()=>{
+    if(blocks.length<2) return;
+    if(takes[cur] && takes[cur].url) URL.revokeObjectURL(takes[cur].url);
+    blocks.splice(cur,1); takes.splice(cur,1); cur=Math.max(0,cur-1); syncEditor();
+  });
+  $('bClear').onclick=()=>armed($('bClear'),'Limpar todos os blocos',()=>{
+    takes.forEach(t=>t&&t.url&&URL.revokeObjectURL(t.url));
+    blocks.splice(0,blocks.length,''); takes=[]; sessionStamp=''; cur=0; syncEditor(); ta.focus();
+  });
 
   function bindRange(id,key,lbl,suffix){
     const el=$(id); el.value=S[key]; $(lbl).textContent=S[key]+(suffix||'');
@@ -401,6 +480,7 @@
   bindToggle('tMirror','mirror'); bindToggle('tCenter','center'); bindToggle('tDir','dir');
   bindToggle('tAuto','autostop');
   bindToggle('tBlocks','blocks');
+  syncEditor();
   bindToggle('tCam','cam'); bindToggle('tFront','front');
 
   // ---------- prompter ----------
@@ -852,8 +932,9 @@
     $('rSave').textContent = bm ? 'Baixar este bloco' : (DESK ? 'Baixar vídeo' : 'Salvar no iPhone');
     $('rAgain').textContent = bm ? 'Regravar este bloco' : 'Gravar de novo';
     $('rDiscard').textContent = bm ? 'Descartar este bloco' : 'Descartar e sair';
-    $('rNext').classList.toggle('hidden', !bm || cur>=blocks.length-1);
-    $('rSave').classList.toggle('pri', !bm || cur>=blocks.length-1);
+    $('rNext').classList.toggle('hidden', !bm);
+    if(bm){ const n=view+1; $('rNext').textContent = (n<blocks.length && blocks[n].trim()) ? 'Próximo bloco ('+(n+1)+') ›' : '+ Próximo bloco (colar texto)'; }
+    $('rSave').classList.toggle('pri', !bm);
     const n=takeCount();
     $('rAll').classList.toggle('hidden', !bm || n<1);
     $('rAll').textContent = 'Baixar todos os blocos ('+n+')';
@@ -868,13 +949,34 @@
       const first=b.replace(/\[[^\]]*\]/g,'').replace(/\s+/g,' ').trim();
       row.innerHTML='<b>'+(i+1)+'.</b><span class="bt"></span><span class="st'+(ok?' ok':old?' old':'')+'">'+
         (ok?'✓ '+fmtT(t.dur):old?'texto mudou':'não gravado')+'</span>';
-      row.querySelector('.bt').textContent=first;
+      row.querySelector('.bt').textContent=first || '(sem texto)';
       if(t){ const p=document.createElement('button'); p.textContent='▶ Ver'; p.onclick=()=>showTake(i,true); row.appendChild(p); }
+      const e=document.createElement('button'); e.textContent='✎ Texto'; e.onclick=()=>openPanel(i); row.appendChild(e);
       const g=document.createElement('button'); g.textContent= t ? '● Regravar' : '● Gravar';
-      g.onclick=()=>{ cur=i; backToPlay(); }; row.appendChild(g);
+      g.onclick=()=>{ if(!b.trim()) return openPanel(i); cur=i; backToPlay(); }; row.appendChild(g);
       box.appendChild(row);
     });
+    const add=document.createElement('div'); add.className='brow add'; add.textContent='+ Novo bloco (colar o texto e gravar)';
+    add.onclick=()=>openPanel(blocks.length); box.appendChild(add);
   }
+  // painel para colar/editar o texto de um bloco sem sair da gravação (a câmera continua ligada)
+  let panelIdx=0;
+  function openPanel(i){
+    panelIdx=i; $('playback').pause();
+    $('npTitle').textContent = (i>=blocks.length ? 'Novo bloco ' : 'Texto do bloco ')+(i+1);
+    $('npText').value = blocks[i]||'';
+    $('nextPanel').classList.remove('hidden');
+    setTimeout(()=>$('npText').focus(),50);
+  }
+  $('npCancel').onclick=()=>$('nextPanel').classList.add('hidden');
+  $('npGo').onclick=()=>{
+    const t=$('npText').value;
+    if(!t.trim()){ $('npText').placeholder='Cole o texto do bloco antes de gravar.'; $('npText').focus(); return; }
+    if(panelIdx>=blocks.length) blocks.push(t); else blocks[panelIdx]=t;
+    cur=panelIdx; saveBlocks();
+    $('nextPanel').classList.add('hidden');
+    backToPlay();
+  };
   // volta para a tela de gravação (no modo blocos a câmera já está ligada)
   function backToPlay(){
     const v=$('playback'); v.pause();
@@ -929,7 +1031,12 @@
     DB.clear();
     $('saveMsg').textContent = list.length+' vídeos salvos'+(DESK?' na pasta Downloads':'')+' ('+fileName(list[0].i).split('_')[0]+'_bloco-01, 02…). Se o navegador perguntar sobre vários downloads, escolha Permitir.';
   };
-  $('rNext').onclick = ()=>{ cur=Math.min(blocks.length-1, view+1); backToPlay(); };
+  // próximo bloco: se já tiver texto, vai direto gravar; se não, abre o painel para colar o texto
+  $('rNext').onclick = ()=>{
+    const n=view+1;
+    if(n<blocks.length && blocks[n].trim()){ cur=n; backToPlay(); }
+    else openPanel(n);
+  };
   $('rAgain').onclick = ()=>{
     if(revBlockMode){ cur=view; backToPlay(); return; }
     $('playback').pause(); $('review').classList.add('hidden'); enterPlay();
@@ -959,7 +1066,7 @@
     $('playback').pause(); stopCam();
     try{ document.fullscreenElement && document.exitFullscreen(); }catch(e){}
     try{ document.webkitFullscreenElement && document.webkitExitFullscreen(); }catch(e){}
-    $('review').classList.add('hidden'); $('edit').classList.remove('hidden');
+    $('review').classList.add('hidden'); $('edit').classList.remove('hidden'); syncEditor();
   };
 
   // ---------- permissão ----------
@@ -1028,13 +1135,12 @@
   }
 
   async function enterPlay(){
-    S.text=ta.value; save();
+    // só copia o campo de texto se viemos da tela de edição (senão ele pode ter o texto de outro bloco)
+    if(S.blocks){ if(!$('edit').classList.contains('hidden')){ blocks[cur]=ta.value; } saveBlocks(); }
+    else S.text=ta.value;
+    save();
     if(S.cam) wakeAudio(); // dentro do clique em Começar / Gravar de novo
-    if(S.blocks){
-      blocks = splitBlocks(S.text);
-      if(cur>=blocks.length) cur=0;
-      if(!takes.some(Boolean)) { takes=[]; sessionStamp=''; }
-    } else blocks=[];
+    if(S.blocks && !takes.some(Boolean)) sessionStamp='';
     // no Mac abre em tela cheia (precisa ser logo no clique, antes de qualquer espera)
     if(DESK){ try{ const r=document.documentElement; (r.requestFullscreen||r.webkitRequestFullscreen).call(r).catch(()=>{}); }catch(e){} }
     $('edit').classList.add('hidden'); $('play').classList.remove('hidden');
@@ -1057,7 +1163,7 @@
     if(rec && rec.state==='recording'){ rec.onstop=null; rec.stop(); clearInterval(recTick); $('recBtn').classList.remove('rec'); $('recTag').classList.add('hidden'); }
     stopCam();
     setPlaying(false); clearInterval(countTimer); $('count').classList.add('hidden');
-    $('play').classList.add('hidden'); $('edit').classList.remove('hidden');
+    $('play').classList.add('hidden'); $('edit').classList.remove('hidden'); syncEditor();
     $('speed').value=S.speed; $('vSpeed').textContent=S.speed+' ppm'; updateMeta();
     $('size').value=S.size; $('vSize').textContent=S.size;
     $('tMirror').classList.toggle('on',S.mirror);
@@ -1072,7 +1178,7 @@
   function goBlock(d){
     if(!blockMode() || (rec && rec.state==='recording')) return;
     const n = Math.max(0, Math.min(blocks.length-1, cur+d)); if(n===cur) return;
-    cur=n; setPlaying(false); $('pausedTag').classList.add('hidden'); y=0; render();
+    cur=n; saveBlocks(); setPlaying(false); $('pausedTag').classList.add('hidden'); y=0; render();
   }
   $('bPrevBlock').onclick = ()=>goBlock(-1);
   $('bNextBlock').onclick = ()=>goBlock(1);
